@@ -31,16 +31,15 @@ def get_msk_today_str():
     return get_msk_now().strftime("%Y-%m-%d")
 
 
-BOT_TOKEN = "8943696232:AAG3rX23_WNM6OSfKLLkgDxK2yo8-HZ1O4k"
-BOT_USERNAME = "mines2gmbot"
-ADMINS = [6539341659, 6025818386]
+from db_config import (
+    BOT_TOKEN, BOT_USERNAME, ADMINS,
+    DATABASE_URL, REDIS_URL,
+    WEBHOOK_HOST, WEB_SERVER_PORT
+)
 
-WEBHOOK_HOST = "https://kleymorf.shop"
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
-
 WEB_SERVER_HOST = "0.0.0.0"
-WEB_SERVER_PORT = 13153
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -2132,14 +2131,13 @@ async def show_top(message, chat_id=None):
     )
 
 
-# --- RECENT GAMES / HISTORY / STATS ---
 
 def get_active_unplayed_games(user_id):
     result = []
     for gid, g in games.items():
         if g.get("owner_id") == user_id:
             if not g.get("game_over", False) and not g.get("settled", False) and not g.get("expired", False):
-                if g.get("stage") == "playing":
+                if g.get("stage") in ["playing", "ready"]:
                     result.append((gid, g))
     return sorted(result, key=lambda x: x[0], reverse=True)
 
@@ -2171,7 +2169,8 @@ async def show_recent_games_menu(message_or_callback, user_id, user_name, page=1
     type_names = {
         "mines": "Мины",
         "tower": "Башня",
-        "diamonds": "Алмазы"
+        "diamonds": "Алмазы",
+        "twentyone": "21 (Очко)"
     }
 
     for gid, gdata in page_games:
@@ -2594,6 +2593,208 @@ async def cmd_set(message: types.Message):
         )
     else:
         await message.reply("<i>Ошибка базы данных!</i>", parse_mode=ParseMode.HTML)
+
+
+def parse_record_field(field_str: str):
+    if not field_str:
+        return None, None
+    f = field_str.lower().strip()
+    if f in ["баланс", "balance", "max_balance", "макс", "максбаланс", "bal", "max", "б"]:
+        return "max_balance", "Рекорд максимального баланса"
+    if f in ["игры", "игры_колво", "games", "game", "игр", "и"]:
+        return "games", "Сыграно игр"
+    if f in ["слив", "проигрыш", "проигрыши", "lost", "проиграно", "lose", "с", "п"]:
+        return "lost", "Проиграно m¢"
+    return None, None
+
+
+@dp.message(Command("setrec", "setrecord", "изменитьрекорд"))
+async def cmd_setrec(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in ADMINS:
+        await message.answer("<i>У вас нет прав для этой команды!</i>", parse_mode=ParseMode.HTML)
+        return
+
+    text = (message.text or "").strip()
+    parts = text.split()
+
+    target_user_id = None
+    target_name = None
+    field_arg = None
+    val_arg = None
+
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target_user = message.reply_to_message.from_user
+        target_user_id = target_user.id
+        target_name = target_user.first_name or f"ID:{target_user_id}"
+        if len(parts) >= 3:
+            field_arg = parts[1]
+            val_arg = parts[2]
+        else:
+            await message.reply(
+                "<i>Использование в ответ на сообщение:\n"
+                "/setrec &lt;тип&gt; &lt;значение&gt;\n\n"
+                "Типы:\n"
+                "• <code>баланс</code> (максимальный баланс)\n"
+                "• <code>игры</code> (количество игр)\n"
+                "• <code>слив</code> (сумма проигрышей)\n\n"
+                "Пример: <code>/setrec баланс 50кк</code> или <code>/setrec игры 500</code></i>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+    elif len(parts) >= 4:
+        target_arg = parts[1]
+        field_arg = parts[2]
+        val_arg = parts[3]
+        if target_arg.startswith("@"):
+            uname = target_arg.lstrip("@")
+            found = get_user_by_username(uname)
+            if not found:
+                await message.reply(f"<i>Пользователь @{uname} не найден в базе бота!</i>", parse_mode=ParseMode.HTML)
+                return
+            target_user_id = found["user_id"]
+            target_name = f"@{uname}"
+        elif target_arg.isdigit():
+            target_user_id = int(target_arg)
+            target_name = get_user_display_name(target_user_id)
+        else:
+            found = get_user_by_username(target_arg)
+            if found:
+                target_user_id = found["user_id"]
+                target_name = f"@{target_arg}"
+            else:
+                await message.reply(f"<i>Пользователь {target_arg} не найден в базе бота!</i>", parse_mode=ParseMode.HTML)
+                return
+    else:
+        await message.reply(
+            "<i>Использование:\n"
+            "• <code>/setrec &lt;@user/ID&gt; &lt;тип&gt; &lt;значение&gt;</code>\n"
+            "• ответом на сообщение: <code>/setrec &lt;тип&gt; &lt;значение&gt;</code>\n\n"
+            "Доступные типы:\n"
+            "• <code>баланс</code> (максимальный баланс)\n"
+            "• <code>игры</code> (количество сыгранных игр)\n"
+            "• <code>слив</code> (сумма проигрышей)\n\n"
+            "Пример: <code>/setrec @durov баланс 100кк</code></i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    col_name, col_title = parse_record_field(field_arg)
+    if not col_name:
+        await message.reply(
+            "<i>Неизвестный тип рекорда! Доступны: <code>баланс</code>, <code>игры</code>, <code>слив</code></i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    amount = parse_amount(val_arg)
+    if amount is None or amount < 0:
+        await message.reply("<i>Неверное значение! Пример: 100, 1.4кк, 500</i>", parse_mode=ParseMode.HTML)
+        return
+
+    kwargs = {col_name: amount}
+    if update_user(target_user_id, **kwargs):
+        admin_name = html.escape(message.from_user.first_name or "Админ")
+        admin_link = f'<a href="tg://user?id={user_id}">{admin_name}</a>'
+        target_link = f'<a href="tg://user?id={target_user_id}">{html.escape(str(target_name))}</a>'
+        await message.reply(
+            f'<i>{admin_link}, успешно обновлен рекорд для {target_link}!\n'
+            f'👑 <b>{col_title}:</b> {format_number(amount)}</i>',
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await message.reply("<i>Ошибка при обновлении базы данных!</i>", parse_mode=ParseMode.HTML)
+
+
+@dp.message(Command("delrec", "delrecord", "resetrec", "удалитьрекорд", "сброситьрекорд"))
+async def cmd_delrec(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in ADMINS:
+        await message.answer("<i>У вас нет прав для этой команды!</i>", parse_mode=ParseMode.HTML)
+        return
+
+    text = (message.text or "").strip()
+    parts = text.split()
+
+    target_user_id = None
+    target_name = None
+    field_arg = None
+
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target_user = message.reply_to_message.from_user
+        target_user_id = target_user.id
+        target_name = target_user.first_name or f"ID:{target_user_id}"
+        if len(parts) >= 2:
+            field_arg = parts[1]
+    elif len(parts) >= 2:
+        target_arg = parts[1]
+        if len(parts) >= 3:
+            field_arg = parts[2]
+        if target_arg.startswith("@"):
+            uname = target_arg.lstrip("@")
+            found = get_user_by_username(uname)
+            if not found:
+                await message.reply(f"<i>Пользователь @{uname} не найден в базе бота!</i>", parse_mode=ParseMode.HTML)
+                return
+            target_user_id = found["user_id"]
+            target_name = f"@{uname}"
+        elif target_arg.isdigit():
+            target_user_id = int(target_arg)
+            target_name = get_user_display_name(target_user_id)
+        else:
+            found = get_user_by_username(target_arg)
+            if found:
+                target_user_id = found["user_id"]
+                target_name = f"@{target_arg}"
+            else:
+                col, _ = parse_record_field(target_arg)
+                if col:
+                    target_user_id = user_id
+                    target_name = message.from_user.first_name or "Админ"
+                    field_arg = target_arg
+                else:
+                    await message.reply(f"<i>Пользователь {target_arg} не найден в базе бота!</i>", parse_mode=ParseMode.HTML)
+                    return
+    else:
+        await message.reply(
+            "<i>Использование:\n"
+            "• <code>/delrec &lt;@user/ID&gt; [тип]</code> — сбросить рекорды пользователя\n"
+            "• ответом на сообщение: <code>/delrec [тип]</code>\n\n"
+            "Типы: <code>все</code> (по умолчанию) | <code>баланс</code> | <code>игры</code> | <code>слив</code>\n"
+            "Пример: <code>/delrec @username</code> или <code>/delrec @username баланс</code></i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    u_data = get_user(target_user_id)
+    cur_balance = u_data.get("balance", 0)
+
+    if not field_arg or field_arg.lower().strip() in ["все", "all", "всё"]:
+        success = update_user(target_user_id, max_balance=cur_balance, games=0, lost=0)
+        desc = f"Все рекорды сброшены (Макс. баланс: {format_number(cur_balance)} m¢, Игры: 0, Проиграно: 0)"
+    else:
+        col_name, col_title = parse_record_field(field_arg)
+        if not col_name:
+            await message.reply(
+                "<i>Неизвестный тип рекорда! Доступны: <code>все</code>, <code>баланс</code>, <code>игры</code>, <code>слив</code></i>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        val = cur_balance if col_name == "max_balance" else 0
+        success = update_user(target_user_id, **{col_name: val})
+        desc = f"Рекорд «{col_title}» сброшен в {format_number(val)}"
+
+    if success:
+        admin_name = html.escape(message.from_user.first_name or "Админ")
+        admin_link = f'<a href="tg://user?id={user_id}">{admin_name}</a>'
+        target_link = f'<a href="tg://user?id={target_user_id}">{html.escape(str(target_name))}</a>'
+        await message.reply(
+            f'<i>{admin_link}, для пользователя {target_link} успешно выполнено:\n'
+            f'🗑 {desc} ✅</i>',
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await message.reply("<i>Ошибка при обновлении базы данных!</i>", parse_mode=ParseMode.HTML)
 
 
 @dp.message(Command("sna"))
@@ -3335,6 +3536,11 @@ async def cmd_mines(message: types.Message):
         await show_mines_info(message, user_id)
         return
 
+    unplayed = get_active_unplayed_games(user_id)
+    if unplayed:
+        await message.answer("<i>У вас уже есть игра! Закончите или доиграйте активную игру.</i>", parse_mode=ParseMode.HTML)
+        return
+
     args = parts[1].strip().split()
     user_data = get_user(user_id)
 
@@ -3394,6 +3600,11 @@ async def cmd_tower(message: types.Message):
         await show_tower_info(message, user_id)
         return
 
+    unplayed = get_active_unplayed_games(user_id)
+    if unplayed:
+        await message.answer("<i>У вас уже есть игра! Закончите или доиграйте активную игру.</i>", parse_mode=ParseMode.HTML)
+        return
+
     args = parts[1].strip().split()
     user_data = get_user(user_id)
 
@@ -3451,6 +3662,11 @@ async def cmd_diamonds(message: types.Message):
 
     if len(parts) == 1:
         await show_diamonds_info(message, user_id)
+        return
+
+    unplayed = get_active_unplayed_games(user_id)
+    if unplayed:
+        await message.answer("<i>У вас уже есть игра! Закончите или доиграйте активную игру.</i>", parse_mode=ParseMode.HTML)
         return
 
     args = parts[1].strip().split()
@@ -3541,6 +3757,11 @@ async def cmd_twentyone(message: types.Message):
 
     if len(parts) == 1:
         await show_twentyone_info(message, user_id)
+        return
+
+    unplayed = get_active_unplayed_games(user_id)
+    if unplayed:
+        await message.answer("<i>У вас уже есть игра! Закончите или доиграйте активную игру.</i>", parse_mode=ParseMode.HTML)
         return
 
     bet_str = parts[1].strip()
@@ -9904,6 +10125,10 @@ async def cmd_get(message: types.Message):
     mp_balance = u_data.get("mp_balance", 0) or 0
     mp_limit = get_user_mp_limit(u_data)
 
+    max_bal = u_data.get("max_balance") if u_data.get("max_balance") is not None else balance
+    games_count = u_data.get("games", 0) or 0
+    lost_amount = u_data.get("lost", 0) or 0
+
     info_text = (
         f'<tg-emoji emoji-id="5465665476971471368">👤</tg-emoji> <b>Информация о пользователе:</b>\n'
         f'<blockquote>Игрок: {user_mention}\n'
@@ -9912,6 +10137,10 @@ async def cmd_get(message: types.Message):
         f'<tg-emoji emoji-id="5418238674267556907">⭐</tg-emoji> <b>Баланс:</b> <b>{format_number(balance)} m¢</b>\n'
         f'💎 <b>MP Баланс:</b> <b>{format_number(mp_balance)} MP</b> (Лимит: {format_number(mp_limit)}/д.)\n'
         f'📅 <b>Регистрация:</b> <i>{reg_date}</i>\n'
+        f'👑 <b>Рекорды:</b>\n'
+        f'<blockquote>• Макс. баланс: <b>{format_number(max_bal)} m¢</b>\n'
+        f'• Сыграно игр: <b>{format_number(games_count)}</b>\n'
+        f'• Проиграно: <b>{format_number(lost_amount)} m¢</b></blockquote>\n'
         f'🛡 <b>Статус бана:</b> {ban_status}\n'
         f'🏆 <b>Статус топа:</b> {top_ban_status}\n'
         f'💳 <b>Статус переводов:</b> {tr_ban_status}\n'
@@ -9919,7 +10148,51 @@ async def cmd_get(message: types.Message):
         f'🕹 <b>Последняя игра:</b>\n{last_game_str}'
     )
 
-    await message.reply(info_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+    get_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🗑 Сбросить рекорды",
+                    callback_data=f"adm_reset_rec_{target_user_id}"
+                ),
+                InlineKeyboardButton(
+                    text="📜 История переводов",
+                    callback_data=f"thist_{target_user_id}_1"
+                )
+            ]
+        ]
+    )
+
+    await message.reply(info_text, reply_markup=get_keyboard, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("adm_reset_rec_"))
+async def process_adm_reset_rec(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMINS:
+        await callback.answer("У вас нет прав администратора!", show_alert=True)
+        return
+
+    try:
+        target_user_id = int(callback.data.split("_")[-1])
+    except Exception:
+        await callback.answer("Ошибка пользователя!", show_alert=True)
+        return
+
+    u_data = get_user(target_user_id)
+    cur_bal = u_data.get("balance", 0)
+    update_user(target_user_id, max_balance=cur_bal, games=0, lost=0)
+    await callback.answer("✅ Рекорды пользователя успешно сброшены!", show_alert=True)
+    target_name = get_user_display_name(target_user_id)
+    try:
+        await callback.message.reply(
+            f"<i>✅ Рекорды пользователя <b>{html.escape(str(target_name))}</b> (<code>{target_user_id}</code>) сброшены!\n"
+            f"• Макс. баланс: {format_number(cur_bal)} m¢\n"
+            f"• Сыграно игр: 0\n"
+            f"• Проиграно: 0 m¢</i>",
+            parse_mode=ParseMode.HTML
+        )
+    except Exception:
+        pass
 
 
 # --- TRANSFERS HISTORY (ADMIN) ---
@@ -13463,7 +13736,13 @@ def parse_telegram_init_data(init_data: str, bot_token: str = ""):
     if not init_data:
         return None
     try:
-        parsed = dict(urllib.parse.parse_qsl(init_data))
+        raw = init_data
+        if "%" in raw:
+            try:
+                raw = urllib.parse.unquote(raw)
+            except Exception:
+                pass
+        parsed = dict(urllib.parse.parse_qsl(raw))
         if "user" in parsed:
             return json.loads(parsed["user"])
     except Exception:
@@ -13698,6 +13977,17 @@ async def asset_rotator_task():
 
 
 async def on_startup(bot: Bot) -> None:
+    try:
+        from db import init_db_pool
+        await init_db_pool()
+    except Exception as e:
+        logging.warning(f"Database pool init warning: {e}")
+    try:
+        from redis_client import get_redis
+        await get_redis()
+    except Exception as e:
+        logging.warning(f"Redis init warning: {e}")
+
     init_caches()
     asyncio.create_task(check_expired_games_task())
     asyncio.create_task(check_time_deposits_task())

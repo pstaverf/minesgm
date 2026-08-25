@@ -309,7 +309,7 @@ class ArenaEngine:
 
             return real_x, real_y
 
-        P_POWER = 5.2
+        P_POWER = 7.2
         def s_to_t(s_val):
             s_clamped = max(0.0, min(1.0, s_val))
             return 1.0 - (1.0 - s_clamped) ** (1.0 / P_POWER)

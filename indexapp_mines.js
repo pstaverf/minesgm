@@ -1,10 +1,14 @@
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if (tg) {
     try {
-        tg.ready();
-        tg.expand();
-        tg.setHeaderColor('#0a0a0a');
-        tg.setBackgroundColor('#0a0a0a');
+        if (typeof tg.ready === "function") tg.ready();
+        if (typeof tg.expand === "function") tg.expand();
+    } catch (_) {}
+    try {
+        if (typeof tg.setHeaderColor === "function") tg.setHeaderColor('#0a0a0a');
+    } catch (_) {}
+    try {
+        if (typeof tg.setBackgroundColor === "function") tg.setBackgroundColor('#0a0a0a');
     } catch (_) {}
 }
 const ARENA_BALL_SPINUP_MS = 1150;
@@ -165,14 +169,14 @@ function escapeHtml(str) {
 }
 function triggerHaptic(style = "medium") {
     try {
-        if (window.Telegram?.WebApp?.HapticFeedback) {
-            const hf = window.Telegram.WebApp.HapticFeedback;
+        const hf = window.Telegram?.WebApp?.HapticFeedback;
+        if (hf) {
             if (style === "light" || style === "medium" || style === "heavy" || style === "rigid" || style === "soft") {
-                hf.impactOccurred(style);
+                if (typeof hf.impactOccurred === "function") hf.impactOccurred(style);
             } else if (style === "success" || style === "error" || style === "warning") {
-                hf.notificationOccurred(style);
+                if (typeof hf.notificationOccurred === "function") hf.notificationOccurred(style);
             }
-        } else if (navigator.vibrate) {
+        } else if (navigator && navigator.vibrate) {
             const duration = style === "heavy" ? 45 : (style === "medium" ? 25 : (style === "light" ? 12 : 20));
             navigator.vibrate(duration);
         }
@@ -195,17 +199,35 @@ function showToast(text, type = "ok") {
 async function apiRequest(path, method = "GET", body = null) {
     const headers = { "Content-Type": "application/json" };
     if (tg?.initData) {
-        headers["X-Telegram-Init-Data"] = tg.initData;
+        try {
+            headers["X-Telegram-Init-Data"] = encodeURIComponent(tg.initData);
+        } catch (_) {}
     }
-    headers["X-User-Id"] = String(state.user.id);
-    headers["X-User-Name"] = encodeURIComponent(state.user.firstName);
-    headers["X-User-Username"] = encodeURIComponent(state.user.username);
+    if (state.user?.id) {
+        headers["X-User-Id"] = String(state.user.id);
+    }
+    if (state.user?.firstName) {
+        try {
+            headers["X-User-Name"] = encodeURIComponent(state.user.firstName);
+        } catch (_) {}
+    }
+    if (state.user?.username) {
+        try {
+            headers["X-User-Username"] = encodeURIComponent(state.user.username);
+        } catch (_) {}
+    }
     const options = { method, headers };
     if (body) {
         options.body = JSON.stringify(body);
     }
     const res = await fetch(path, options);
-    const data = await res.json();
+    const text = await res.text();
+    let data;
+    try {
+        data = JSON.parse(text);
+    } catch (_) {
+        data = { error: text || "Ошибка ответа сервера" };
+    }
     if (!res.ok || data.error) {
         throw new Error(data.error || "Ошибка запроса");
     }
@@ -861,7 +883,9 @@ function initWebSocket() {
             measurePing();
         };
         arenaWs.onmessage = (event) => {
-            if (event.data === "pong") {
+            const raw = typeof event.data === "string" ? event.data.trim() : "";
+            if (!raw) return;
+            if (raw.toLowerCase().startsWith("pong") || raw.toLowerCase().startsWith("ping")) {
                 if (lastPingTime > 0) {
                     const rtt = Math.max(1, Math.round(performance.now() - lastPingTime));
                     updatePingUI(rtt);
@@ -869,7 +893,7 @@ function initWebSocket() {
                 return;
             }
             try {
-                const data = JSON.parse(event.data);
+                const data = JSON.parse(raw);
                 if (data && data.round) {
                     renderArenaRound(data.round);
                 }
