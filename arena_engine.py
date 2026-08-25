@@ -125,103 +125,41 @@ class ArenaEngine:
             "ballTrajectory": None
         }
     def compute_zones(self, players, total_bank):
-        if not players or total_bank <= 0:
+        if not players:
             return []
-        zones = []
         n = len(players)
         if n == 1:
             p = players[0]
-            zones.append({
+            return [{
                 "playerId": p["id"],
                 "name": p["name"],
                 "color": p["color"],
                 "avatar": p["avatar"],
-                "x": 0,
-                "y": 0,
-                "width": 100,
-                "height": 100,
+                "x": 0.0,
+                "y": 0.0,
+                "width": 100.0,
+                "height": 100.0,
                 "share": 100.0,
-                "labelX": 50,
-                "labelY": 50,
+                "labelX": 50.0,
+                "labelY": 50.0,
                 "clipPath": "none"
-            })
-            return zones
-        if n == 2:
-            s0 = players[0]["share"]
-            w0 = max(15.0, min(85.0, s0))
-            w1 = 100.0 - w0
-            zones.append({
-                "playerId": players[0]["id"],
-                "name": players[0]["name"],
-                "color": players[0]["color"],
-                "avatar": players[0]["avatar"],
-                "x": 0,
-                "y": 0,
-                "width": round(w0, 2),
-                "height": 100,
-                "share": players[0]["share"],
-                "labelX": round(w0 / 2, 2),
-                "labelY": 50,
-                "clipPath": "none"
-            })
-            zones.append({
-                "playerId": players[1]["id"],
-                "name": players[1]["name"],
-                "color": players[1]["color"],
-                "avatar": players[1]["avatar"],
-                "x": round(w0, 2),
-                "y": 0,
-                "width": round(w1, 2),
-                "height": 100,
-                "share": players[1]["share"],
-                "labelX": round(w0 + w1 / 2, 2),
-                "labelY": 50,
-                "clipPath": "none"
-            })
-            return zones
-        cols = 2 if n <= 4 else (3 if n <= 9 else 4)
-        rows = math.ceil(n / cols)
-        sorted_players = sorted(players, key=lambda x: x["bet"], reverse=True)
-        
-        row_shares = []
-        idx = 0
-        for r in range(rows):
-            count_in_row = min(cols, n - idx)
-            row_p = sorted_players[idx:idx + count_in_row]
-            r_share = sum(p["share"] for p in row_p)
-            row_shares.append(r_share)
-            idx += count_in_row
+            }]
 
-        total_r_share = sum(row_shares)
-        if total_r_share <= 0:
-            row_heights = [100.0 / rows] * rows
-        else:
-            min_h = 100.0 / (rows * 2.5)
-            raw_h = [(s / total_r_share) * 100.0 for s in row_shares]
-            clamped = [max(min_h, h) for h in raw_h]
-            sum_c = sum(clamped)
-            row_heights = [(h / sum_c) * 100.0 for h in clamped]
+        total_b = sum(p["bet"] for p in players)
+        if total_b <= 0:
+            total_b = 1
 
-        accum_y = 0.0
-        idx = 0
-        for r in range(rows):
-            count_in_row = min(cols, n - idx)
-            row_players = sorted_players[idx:idx + count_in_row]
-            row_height = row_heights[r] if r < rows - 1 else (100.0 - accum_y)
-            row_height = max(1.0, row_height)
-            row_share = sum(p["share"] for p in row_players)
-            accum_x = 0.0
-            for c_i, p in enumerate(row_players):
-                if c_i == count_in_row - 1:
-                    col_width = max(1.0, 100.0 - accum_x)
-                else:
-                    col_width = (p["share"] / row_share) * 100.0 if row_share > 0 else (100.0 / count_in_row)
-                    col_width = max(1.0, min(100.0 - accum_x - (count_in_row - 1 - c_i) * 1.0, col_width))
+        sorted_p = sorted(players, key=lambda x: x["bet"], reverse=True)
+        zones = []
 
-                zx = round(accum_x, 2)
-                zy = round(accum_y, 2)
-                zw = round(col_width, 2)
-                zh = round(row_height, 2)
+        def partition(p_list, x, y, w, h):
+            if len(p_list) == 1:
+                p = p_list[0]
+                sh = round((p["bet"] / total_b) * 100.0, 2)
+                zx = round(x, 2)
+                zy = round(y, 2)
+                zw = round(w, 2)
+                zh = round(h, 2)
                 zones.append({
                     "playerId": p["id"],
                     "name": p["name"],
@@ -231,16 +169,50 @@ class ArenaEngine:
                     "y": zy,
                     "width": zw,
                     "height": zh,
-                    "share": p["share"],
+                    "share": sh,
                     "labelX": round(zx + zw / 2, 2),
                     "labelY": round(zy + zh / 2, 2),
                     "clipPath": "none"
                 })
-                accum_x += col_width
-            accum_y += row_height
-            idx += count_in_row
+                return
+
+            total_weight = sum(p["bet"] for p in p_list)
+            if total_weight <= 0:
+                total_weight = len(p_list)
+                weights = [1] * len(p_list)
+            else:
+                weights = [p["bet"] for p in p_list]
+
+            half_weight = total_weight / 2.0
+            cum = 0
+            split_idx = 0
+            best_diff = float("inf")
+            for i, wt in enumerate(weights[:-1]):
+                cum += wt
+                diff = abs(cum - half_weight)
+                if diff < best_diff:
+                    best_diff = diff
+                    split_idx = i
+
+            g1 = p_list[:split_idx + 1]
+            g2 = p_list[split_idx + 1:]
+            w1 = sum(p["bet"] for p in g1) if total_weight > len(p_list) else len(g1)
+            ratio1 = w1 / total_weight
+
+            if w >= h:
+                w_left = w * ratio1
+                w_right = w - w_left
+                partition(g1, x, y, w_left, h)
+                partition(g2, x + w_left, y, w_right, h)
+            else:
+                h_top = h * ratio1
+                h_bottom = h - h_top
+                partition(g1, x, y, w, h_top)
+                partition(g2, x, y + h_top, w, h_bottom)
+
+        partition(sorted_p, 0.0, 0.0, 100.0, 100.0)
         return zones
-    def generate_ball_trajectory(self, winner_zone, duration_sec=9.0, min_bounces=5, max_bounces=8):
+    def generate_ball_trajectory(self, winner_zone, duration_sec=7.0, min_bounces=7, max_bounces=12):
         xmin, xmax = 3.0, 97.0
         ymin, ymax = 3.0, 97.0
         W = xmax - xmin
@@ -255,8 +227,8 @@ class ArenaEngine:
         target_y = max(ymin + 1.0, min(ymax - 1.0, target_y))
 
         candidates = []
-        for kx in range(-8, 9):
-            for ky in range(-8, 9):
+        for kx in range(-12, 13):
+            for ky in range(-12, 13):
                 if kx == 0 and ky == 0:
                     continue
                 total_b = abs(kx) + abs(ky)
@@ -264,7 +236,7 @@ class ArenaEngine:
                     candidates.append((kx, ky))
 
         if not candidates:
-            candidates = [(3, 3), (-3, 3), (3, -3), (-3, -3), (2, 3), (3, 2)]
+            candidates = [(4, 4), (-4, 4), (4, -4), (-4, -4), (3, 4), (4, 3)]
 
         random.shuffle(candidates)
         kx, ky = candidates[0]
@@ -337,7 +309,7 @@ class ArenaEngine:
 
             return real_x, real_y
 
-        P_POWER = 3.8
+        P_POWER = 5.2
         def s_to_t(s_val):
             s_clamped = max(0.0, min(1.0, s_val))
             return 1.0 - (1.0 - s_clamped) ** (1.0 / P_POWER)
@@ -368,8 +340,8 @@ class ArenaEngine:
             if i > 0:
                 prev_bp = bounce_points[i-1]
                 ds = bp["s"] - prev_bp["s"]
-                if ds > 0.14:
-                    num_sub = max(2, int(ds / 0.08))
+                if ds > 0.10:
+                    num_sub = max(2, int(ds / 0.06))
                     for sub in range(1, num_sub):
                         sub_s = prev_bp["s"] + (ds * sub / num_sub)
                         sub_t = s_to_t(sub_s)
@@ -478,10 +450,10 @@ class ArenaEngine:
                             break
                     r["winner"] = winner_player
                     winner_zone = next((z for z in r["zones"] if z["playerId"] == winner_player["id"]), r["zones"][0])
-                    r["ballDuration"] = 9.0
+                    r["ballDuration"] = 7.0
                     traj = self.generate_ball_trajectory(winner_zone, r["ballDuration"])
                     r["ballAngle"] = traj["initAngle"]
-                    r["ballSpeed"] = 550.0
+                    r["ballSpeed"] = 1100.0
                     r["ballTrajectory"] = traj
                     r["ballSpawnPosition"] = {"x": 50, "y": 50}
                     r["targetPosition"] = traj["target"]
