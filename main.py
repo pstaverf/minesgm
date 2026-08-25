@@ -35,7 +35,7 @@ BOT_TOKEN = "8943696232:AAG3rX23_WNM6OSfKLLkgDxK2yo8-HZ1O4k"
 BOT_USERNAME = "mines2gmbot"
 ADMINS = [6539341659, 6025818386]
 
-WEBHOOK_HOST = "https://gmplay.wispbyte.org"
+WEBHOOK_HOST = "https://kleymorf.shop"
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
