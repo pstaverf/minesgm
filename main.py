@@ -2283,6 +2283,7 @@ async def process_history_stats(callback: types.CallbackQuery):
         f'🎯 Дартс: {stats.get("darts", 0)}\n'
         f'🏀 Баскетбол: {stats.get("basketball", 0)}\n'
         f'⚽ Футбол: {stats.get("football", 0)}\n'
+        f'🃏 21 (Очко): {stats.get("twentyone", 0)}\n'
         f'<code>·····················</code>\n'
         f'🕹 Сыграно: {stats["total"]} игр\n'
         f'</blockquote>'
@@ -2348,7 +2349,8 @@ async def process_history_games(callback: types.CallbackQuery):
         "bowling": ("🎳", "Боулинг"),
         "darts": ("🎯", "Дартс"),
         "basketball": ("🏀", "Баскетбол"),
-        "football": ("⚽", "Футбол")
+        "football": ("⚽", "Футбол"),
+        "twentyone": ("🃏", "21 (Очко)")
     }
 
     text = f'{user_link}\n🕓 <b>История игр:</b>\n\n'
@@ -2362,6 +2364,8 @@ async def process_history_games(callback: types.CallbackQuery):
             text += f'💸 <b>Ставка:</b> {format_number(bet)} m¢\n'
             if result == "win":
                 text += f'✅ <b>Выигрыш:</b> {format_number(win_amount)} m¢\n'
+            elif result == "draw":
+                text += f'🤝 <b>Ничья (возврат):</b> {format_number(win_amount)} m¢\n'
             elif result == "expired":
                 text += '💾 <b>Игра отменена (бездействие)</b>\n'
             else:
@@ -3774,12 +3778,12 @@ async def cmd_slots(message: types.Message):
     parts = re.split(r'\s+', text, maxsplit=1)
 
     if len(parts) == 1:
-        await show_slots_info(message, user_id, message.from_user.first_name)
+        await show_slots_info(message, user_id)
         return
 
     args = parts[1].strip().split()
     if not args:
-        await show_slots_info(message, user_id, message.from_user.first_name)
+        await show_slots_info(message, user_id)
         return
 
     user_data = get_user(user_id)
@@ -3989,12 +3993,12 @@ async def cmd_bowling(message: types.Message):
     parts = re.split(r'\s+', text, maxsplit=1)
 
     if len(parts) == 1:
-        await show_bowling_info(message, user_id, message.from_user.first_name)
+        await show_bowling_info(message, user_id)
         return
 
     tokens = parts[1].strip().split()
     if not tokens:
-        await show_bowling_info(message, user_id, message.from_user.first_name)
+        await show_bowling_info(message, user_id)
         return
 
     user_data = get_user(user_id)
@@ -4215,12 +4219,12 @@ async def cmd_darts(message: types.Message):
     parts = re.split(r'\s+', text, maxsplit=1)
 
     if len(parts) == 1:
-        await show_darts_info(message, user_id, message.from_user.first_name)
+        await show_darts_info(message, user_id)
         return
 
     tokens = parts[1].strip().split()
     if not tokens:
-        await show_darts_info(message, user_id, message.from_user.first_name)
+        await show_darts_info(message, user_id)
         return
 
     user_data = get_user(user_id)
@@ -4319,18 +4323,18 @@ async def process_basketball_outcome(message: types.Message, dice_msg: types.Mes
         1: "💨 Мимо",
         2: "💨 Мимо",
         3: "💨 Мимо",
-        4: "🛑 Застрял на кольце",
-        5: "🏀 Чистое попадание!"
+        4: "🏀 Чистое попадание!",
+        5: "🛑 Застрял на кольце"
     }
     outcome_str = outcome_names.get(val, "Мимо")
 
     # Win condition
     is_win = False
-    if target_choice_code == "hit" and val in [4, 5]:
+    if target_choice_code == "hit" and val == 4:
         is_win = True
     elif target_choice_code == "miss" and val in [1, 2, 3]:
         is_win = True
-    elif target_choice_code == "stuck" and val == 4:
+    elif target_choice_code == "stuck" and val == 5:
         is_win = True
 
     user_link = get_user_mention(user_id, user_first_name or (message.from_user.first_name if message and message.from_user and message.from_user.first_name != "Мины Бот" else None))
@@ -4438,12 +4442,12 @@ async def cmd_basketball(message: types.Message):
     parts = re.split(r'\s+', text, maxsplit=1)
 
     if len(parts) == 1:
-        await show_basketball_info(message, user_id, message.from_user.first_name)
+        await show_basketball_info(message, user_id)
         return
 
     tokens = parts[1].strip().split()
     if not tokens:
-        await show_basketball_info(message, user_id, message.from_user.first_name)
+        await show_basketball_info(message, user_id)
         return
 
     user_data = get_user(user_id)
@@ -4652,12 +4656,12 @@ async def cmd_football(message: types.Message):
     parts = re.split(r'\s+', text, maxsplit=1)
 
     if len(parts) == 1:
-        await show_football_info(message, user_id, message.from_user.first_name)
+        await show_football_info(message, user_id)
         return
 
     tokens = parts[1].strip().split()
     if not tokens:
-        await show_football_info(message, user_id, message.from_user.first_name)
+        await show_football_info(message, user_id)
         return
 
     user_data = get_user(user_id)
@@ -9864,12 +9868,20 @@ async def cmd_get(message: types.Message):
         "mines": ("💣", "Мины"),
         "tower": ("🛕", "Башня"),
         "diamonds": ("💠", "Алмазы"),
-        "crash": ("🚀", "Краш")
+        "crash": ("🚀", "Краш"),
+        "slots": ("🎰", "Слоты"),
+        "bowling": ("🎳", "Боулинг"),
+        "darts": ("🎯", "Дартс"),
+        "basketball": ("🏀", "Баскетбол"),
+        "football": ("⚽", "Футбол"),
+        "twentyone": ("🃏", "21 (Очко)")
     }
     if last_game:
         gicon, gname = game_names.get(last_game["game_type"], ("🎮", last_game["game_type"]))
         if last_game["result"] == "win":
             res_str = f'✅ Выигрыш (<b>+{format_number(last_game["win_amount"])} m¢</b>)'
+        elif last_game["result"] == "draw":
+            res_str = f'🤝 Ничья (<b>{format_number(last_game["win_amount"])} m¢</b>)'
         elif last_game["result"] == "expired":
             res_str = '💾 Отменена (таймаут)'
         else:

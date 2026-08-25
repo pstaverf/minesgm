@@ -307,7 +307,7 @@ function resetArenaFieldZoom() {
 function buildArenaBallFrames(round) {
     const start = round?.ballSpawnPosition || round?.targetPosition || { x: 50, y: 50 };
     const angle = Number(round.ballAngle || 0);
-    const speed = Math.max(0, Number(round.ballSpeed || 140));
+    const speed = Math.max(0, Number(round.ballSpeed || 550));
     const durationMs = Math.max(1000, Number(round.ballDuration || 9) * 1000);
     const min = ARENA_BALL_MIN_COORD;
     const max = ARENA_BALL_MAX_COORD;

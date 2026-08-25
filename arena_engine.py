@@ -182,21 +182,42 @@ class ArenaEngine:
         cols = 2 if n <= 4 else (3 if n <= 9 else 4)
         rows = math.ceil(n / cols)
         sorted_players = sorted(players, key=lambda x: x["bet"], reverse=True)
-        total_shares = sum(p["share"] for p in sorted_players)
+        
+        row_shares = []
+        idx = 0
+        for r in range(rows):
+            count_in_row = min(cols, n - idx)
+            row_p = sorted_players[idx:idx + count_in_row]
+            r_share = sum(p["share"] for p in row_p)
+            row_shares.append(r_share)
+            idx += count_in_row
+
+        total_r_share = sum(row_shares)
+        if total_r_share <= 0:
+            row_heights = [100.0 / rows] * rows
+        else:
+            min_h = 100.0 / (rows * 2.5)
+            raw_h = [(s / total_r_share) * 100.0 for s in row_shares]
+            clamped = [max(min_h, h) for h in raw_h]
+            sum_c = sum(clamped)
+            row_heights = [(h / sum_c) * 100.0 for h in clamped]
+
         accum_y = 0.0
         idx = 0
         for r in range(rows):
             count_in_row = min(cols, n - idx)
             row_players = sorted_players[idx:idx + count_in_row]
+            row_height = row_heights[r] if r < rows - 1 else (100.0 - accum_y)
+            row_height = max(1.0, row_height)
             row_share = sum(p["share"] for p in row_players)
-            row_height = max(18.0, min(65.0, (row_share / total_shares) * 100.0 if total_shares > 0 else (100.0 / rows)))
-            if r == rows - 1:
-                row_height = max(15.0, 100.0 - accum_y)
             accum_x = 0.0
             for c_i, p in enumerate(row_players):
-                col_width = (p["share"] / row_share) * 100.0 if row_share > 0 else (100.0 / count_in_row)
                 if c_i == count_in_row - 1:
-                    col_width = max(10.0, 100.0 - accum_x)
+                    col_width = max(1.0, 100.0 - accum_x)
+                else:
+                    col_width = (p["share"] / row_share) * 100.0 if row_share > 0 else (100.0 / count_in_row)
+                    col_width = max(1.0, min(100.0 - accum_x - (count_in_row - 1 - c_i) * 1.0, col_width))
+
                 zx = round(accum_x, 2)
                 zy = round(accum_y, 2)
                 zw = round(col_width, 2)
@@ -219,21 +240,23 @@ class ArenaEngine:
             accum_y += row_height
             idx += count_in_row
         return zones
-    def generate_ball_trajectory(self, winner_zone, duration_sec=9.0, min_bounces=4, max_bounces=6):
+    def generate_ball_trajectory(self, winner_zone, duration_sec=9.0, min_bounces=5, max_bounces=8):
         xmin, xmax = 3.0, 97.0
         ymin, ymax = 3.0, 97.0
         W = xmax - xmin
         H = ymax - ymin
         x0, y0 = 50.0, 50.0
 
-        pad_x = winner_zone["width"]  * 0.25
-        pad_y = winner_zone["height"] * 0.25
+        pad_x = max(0.5, winner_zone["width"]  * 0.2)
+        pad_y = max(0.5, winner_zone["height"] * 0.2)
         target_x = winner_zone["x"] + pad_x + random.uniform(0, max(0.1, winner_zone["width"]  - 2 * pad_x))
         target_y = winner_zone["y"] + pad_y + random.uniform(0, max(0.1, winner_zone["height"] - 2 * pad_y))
+        target_x = max(xmin + 1.0, min(xmax - 1.0, target_x))
+        target_y = max(ymin + 1.0, min(ymax - 1.0, target_y))
 
         candidates = []
-        for kx in range(-5, 6):
-            for ky in range(-5, 6):
+        for kx in range(-8, 9):
+            for ky in range(-8, 9):
                 if kx == 0 and ky == 0:
                     continue
                 total_b = abs(kx) + abs(ky)
@@ -241,7 +264,7 @@ class ArenaEngine:
                     candidates.append((kx, ky))
 
         if not candidates:
-            candidates = [(2, 2), (-2, 2), (2, -2), (-2, -2)]
+            candidates = [(3, 3), (-3, 3), (3, -3), (-3, -3), (2, 3), (3, 2)]
 
         random.shuffle(candidates)
         kx, ky = candidates[0]
@@ -314,7 +337,7 @@ class ArenaEngine:
 
             return real_x, real_y
 
-        P_POWER = 1.85
+        P_POWER = 3.8
         def s_to_t(s_val):
             s_clamped = max(0.0, min(1.0, s_val))
             return 1.0 - (1.0 - s_clamped) ** (1.0 / P_POWER)
@@ -382,19 +405,33 @@ class ArenaEngine:
             "durationMs": int(duration_sec * 1000)
         }
     def add_bet(self, user_id, user_name, user_username, bet_amount, user_avatar=None, user_color=None):
-        self.touch_user(user_id)
         if not self.current_round:
             self.create_new_round()
         r = self.current_round
         if r["status"] not in ["waiting", "launching"]:
             return False, "Раунд уже запущен, дождитесь следующего!"
+        if bet_amount <= 0:
+            return False, "Сумма ставки должна быть больше 0!"
+        self.active_users[user_id] = {
+            "name": user_name or f"Игрок #{user_id}",
+            "username": user_username or "",
+            "avatar": user_avatar or "",
+            "lastSeen": time.time()
+        }
         existing = next((p for p in r["players"] if p["id"] == user_id), None)
         if existing:
             existing["bet"] += bet_amount
+            if user_avatar:
+                existing["avatar"] = user_avatar
+            if user_name:
+                existing["name"] = user_name
+            if user_username:
+                existing["username"] = user_username
         else:
-            color = user_color or ARENA_ZONE_COLORS[len(r["players"]) % len(ARENA_ZONE_COLORS)]
-            clean_n = urllib.parse.quote((user_name or f"U{user_id}").strip()[:10])
-            avatar = user_avatar or f"https://ui-avatars.com/api/?name={clean_n}&background=2563eb&color=fff&bold=true&size=128&rounded=true"
+            used_colors = {p["color"] for p in r["players"]}
+            avail_colors = [c for c in ARENA_ZONE_COLORS if c not in used_colors]
+            color = user_color if user_color else (avail_colors[0] if avail_colors else random.choice(ARENA_ZONE_COLORS))
+            avatar = user_avatar if user_avatar else ""
             r["players"].append({
                 "id": user_id,
                 "name": user_name or f"Игрок #{user_id}",
@@ -444,7 +481,7 @@ class ArenaEngine:
                     r["ballDuration"] = 9.0
                     traj = self.generate_ball_trajectory(winner_zone, r["ballDuration"])
                     r["ballAngle"] = traj["initAngle"]
-                    r["ballSpeed"] = 240.0
+                    r["ballSpeed"] = 550.0
                     r["ballTrajectory"] = traj
                     r["ballSpawnPosition"] = {"x": 50, "y": 50}
                     r["targetPosition"] = traj["target"]
