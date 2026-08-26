@@ -252,8 +252,20 @@ CREATE INDEX IF NOT EXISTS idx_users_balance ON users(balance DESC);
 CREATE INDEX IF NOT EXISTS idx_users_max_balance ON users(max_balance DESC);
 CREATE INDEX IF NOT EXISTS idx_users_games ON users(games DESC);
 CREATE INDEX IF NOT EXISTS idx_users_lost ON users(lost DESC);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(lower(username));
+CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by);
+CREATE INDEX IF NOT EXISTS idx_users_mp_balance ON users(mp_balance DESC);
 CREATE INDEX IF NOT EXISTS idx_games_history_user ON games_history(user_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_transfers_history_users ON transfers_history(sender_id, receiver_id);
+CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id);
+CREATE INDEX IF NOT EXISTS idx_p2p_deals_buyer ON p2p_deals_history(buyer_id);
+CREATE INDEX IF NOT EXISTS idx_p2p_deals_seller ON p2p_deals_history(seller_id);
+CREATE INDEX IF NOT EXISTS idx_savings_history_user ON savings_history(user_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_time_deposits_user_status ON time_deposits(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_promo_activations_user ON promo_activations(user_id);
+CREATE INDEX IF NOT EXISTS idx_chat_members_chat ON chat_members(chat_id);
+CREATE INDEX IF NOT EXISTS idx_arena_history_round ON arena_history(round_id);
+CREATE INDEX IF NOT EXISTS idx_arena_history_winner ON arena_history(winner_id);
 """
 
 

@@ -29,9 +29,8 @@ class ArenaEngine:
         self.active_users = {}  
         self.create_new_round()
     def get_db(self):
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+        from pg_adapter import get_db_connection
+        return get_db_connection()
     def init_db(self):
         with self.get_db() as conn:
             cursor = conn.cursor()

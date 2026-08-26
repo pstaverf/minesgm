@@ -44,7 +44,8 @@ WEB_SERVER_HOST = "0.0.0.0"
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-conn = sqlite3.connect('game.db', check_same_thread=False)
+from pg_adapter import get_db_connection
+conn = get_db_connection()
 conn.create_function("lower", 1, lambda s: s.lower() if s is not None else None)
 cursor = conn.cursor()
 
