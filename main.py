@@ -2441,6 +2441,13 @@ async def process_resume_game(callback: types.CallbackQuery):
     active_games[user_id] = game_id
     game["chat_id"] = callback.message.chat.id
 
+    old_msg_id = game.get("message_id")
+    if old_msg_id and old_msg_id != callback.message.message_id:
+        try:
+            await callback.bot.delete_message(chat_id=callback.message.chat.id, message_id=old_msg_id)
+        except Exception:
+            pass
+
     await callback.answer()
 
     gtype = game.get("type")
@@ -2450,6 +2457,8 @@ async def process_resume_game(callback: types.CallbackQuery):
         await show_tower_grid_from_callback(callback, user_id, game_id)
     elif gtype == "diamonds":
         await show_diamonds_grid_from_callback(callback, user_id, game_id)
+    elif gtype == "twentyone":
+        await show_twentyone_from_callback(callback, user_id, game_id)
     else:
         await callback.answer("Неизвестный тип игры!", show_alert=True)
 
@@ -4515,7 +4524,7 @@ def parse_basketball_choice(choice_text: str):
     if t in ["попадание", "попал", "гол", "hit", "score", "п", "г", "в корзину", "1"]:
         return "hit", "🏀 Попадание", 2.4
     elif t in ["мимо", "промах", "miss", "м", "0"]:
-        return "miss", "💨 Мимо", 1.6
+        return "miss", "💨 Мимо", 2.4
     elif t in ["застрял", "застрял мяч", "дужка", "stuck", "з"]:
         return "stuck", "🛑 Застрял мяч", 4.8
     return None, None, None
@@ -4526,7 +4535,7 @@ def get_basketball_choice_keyboard(bet: int):
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="🏀 Попадание (х2.4)", callback_data=f"bb_{bet}_hit", style="primary"),
-                InlineKeyboardButton(text="💨 Мимо (х1.6)", callback_data=f"bb_{bet}_miss", style="primary"),
+                InlineKeyboardButton(text="💨 Мимо (х2.4)", callback_data=f"bb_{bet}_miss", style="primary"),
             ],
             [
                 InlineKeyboardButton(text="🛑 Застрял мяч (х4.8)", callback_data=f"bb_{bet}_stuck", style="primary"),
@@ -4542,20 +4551,20 @@ async def process_basketball_outcome(message: types.Message, dice_msg: types.Mes
 
     outcome_names = {
         1: "💨 Мимо",
-        2: "💨 Мимо",
-        3: "💨 Мимо",
-        4: "🏀 Чистое попадание!",
-        5: "🛑 Застрял на кольце"
+        2: "💨 Отскок мимо",
+        3: "🛑 Застрял мяч",
+        4: "🏀 Попадание!",
+        5: "🏀 Чистое попадание!"
     }
     outcome_str = outcome_names.get(val, "Мимо")
 
     # Win condition
     is_win = False
-    if target_choice_code == "hit" and val == 4:
+    if target_choice_code == "hit" and val in [4, 5]:
         is_win = True
-    elif target_choice_code == "miss" and val in [1, 2, 3]:
+    elif target_choice_code == "miss" and val in [1, 2]:
         is_win = True
-    elif target_choice_code == "stuck" and val == 5:
+    elif target_choice_code == "stuck" and val == 3:
         is_win = True
 
     user_link = get_user_mention(user_id, user_first_name or (message.from_user.first_name if message and message.from_user and message.from_user.first_name != "Мины Бот" else None))
@@ -4620,7 +4629,7 @@ async def process_basketball_choice_callback(callback: types.CallbackQuery):
 
     code_map = {
         "hit": ("🏀 Попадание", 2.4),
-        "miss": ("💨 Мимо", 1.6),
+        "miss": ("💨 Мимо", 2.4),
         "stuck": ("🛑 Застрял мяч", 4.8)
     }
     if target_code not in code_map:
@@ -4720,7 +4729,7 @@ async def cmd_basketball(message: types.Message):
         f"💸 <b>Ставка:</b> {format_number(bet)} m¢\n\n"
         f"🔰 <b>Коэффициенты:</b>\n"
         f"🏀 Попадание (х2.4)\n"
-        f"💨 Мимо (х1.6)\n"
+        f"💨 Мимо (х2.4)\n"
         f"🛑 Застрял мяч (х4.8)"
     )
     await message.answer(
@@ -8345,6 +8354,101 @@ async def start_twentyone_game_from_command(message, user_id, chat_id, bet):
     user_messages[key].append(msg.message_id)
 
 
+async def show_twentyone_from_callback(callback: types.CallbackQuery, user_id: int, game_id: int):
+    game = games.get(game_id)
+    if not game:
+        await callback.answer("Игра не найдена!", show_alert=True)
+        return
+
+    if game["owner_id"] != user_id:
+        await callback.answer("Это не ваша игра!", show_alert=True)
+        return
+
+    bet = game["bet"]
+    user_first_name = game.get("user_first_name") or callback.from_user.first_name or "Игрок"
+    user_link = get_user_mention(user_id, user_first_name)
+    stage = game.get("stage", "ready")
+
+    if stage == "ready":
+        text = (
+            f'{user_link}\n<tg-emoji emoji-id="5395325195542078574">🍀</tg-emoji>21 · начни игру!\n'
+            '<code>·····················</code>\n'
+            f'<tg-emoji emoji-id="5224257782013769471">💰</tg-emoji><b>Ставка:</b> {format_number(bet)} m¢'
+        )
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Запустить",
+                        callback_data=f"to_start_{game_id}",
+                        style="success",
+                        icon_custom_emoji_id="5809949600152296075"
+                    ),
+                    InlineKeyboardButton(
+                        text="Назад",
+                        callback_data=f"to_cancel_{game_id}",
+                        icon_custom_emoji_id="5255703720078879038"
+                    )
+                ]
+            ]
+        )
+    else:
+        dealer_cards = game.get("dealer_cards", [])
+        player_cards = game.get("player_cards", [])
+        dealer_str = format_21_cards(dealer_cards)
+        player_str = format_21_cards(player_cards)
+        text = (
+            f'{user_link}\n'
+            '♠️<b> 21 · игра идёт.</b> <code>·····················</code>\n'
+            f'<tg-emoji emoji-id="5224257782013769471">💰</tg-emoji> Ставка: {format_number(bet)} m¢\n\n'
+            '🤵♂ Дилер: \n'
+            f'<blockquote>{dealer_str}</blockquote>\n'
+            '<code>············</code>\n'
+            '🫵 Ты: \n'
+            f'<blockquote>{player_str}</blockquote>'
+        )
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="СТОП",
+                        callback_data=f"to_stand_{game_id}",
+                        style="danger",
+                        icon_custom_emoji_id="5445350865776941647"
+                    ),
+                    InlineKeyboardButton(
+                        text="ЕЩЁ",
+                        callback_data=f"to_hit_{game_id}",
+                        style="success",
+                        icon_custom_emoji_id="5809949600152296075"
+                    )
+                ]
+            ]
+        )
+
+    msg = None
+    try:
+        msg = await callback.message.edit_text(
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+            disable_web_page_preview=True
+        )
+    except Exception:
+        try:
+            msg = await callback.message.answer(
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
+        except Exception:
+            pass
+
+    if msg:
+        game["message_id"] = msg.message_id
+
+
 async def update_twentyone_game_view(message_obj, user_id, game_id, user_first_name="Игрок"):
     game = games.get(game_id)
     if not game:
@@ -8389,15 +8493,27 @@ async def update_twentyone_game_view(message_obj, user_id, game_id, user_first_n
         ]
     )
 
+    msg = None
     try:
-        await message_obj.edit_text(
+        msg = await message_obj.edit_text(
             text=text,
             parse_mode=ParseMode.HTML,
             reply_markup=keyboard,
             disable_web_page_preview=True
         )
     except Exception:
-        pass
+        try:
+            msg = await message_obj.answer(
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
+        except Exception:
+            pass
+
+    if msg:
+        game["message_id"] = msg.message_id
 
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("to_start_"))
