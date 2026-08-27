@@ -246,6 +246,24 @@ CREATE TABLE IF NOT EXISTS arena_history (
     created_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS temple_user_stats (
+    user_id BIGINT PRIMARY KEY,
+    gifts_sent BIGINT DEFAULT 0,
+    stars_spent BIGINT DEFAULT 0,
+    updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS temple_gifts_history (
+    id BIGSERIAL PRIMARY KEY,
+    sender_id BIGINT,
+    receiver_id BIGINT,
+    gift_key TEXT,
+    gift_name TEXT,
+    stars_cost BIGINT,
+    comment TEXT,
+    created_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_balance ON users(balance DESC);
 CREATE INDEX IF NOT EXISTS idx_users_max_balance ON users(max_balance DESC);
 CREATE INDEX IF NOT EXISTS idx_users_games ON users(games DESC);
@@ -264,6 +282,8 @@ CREATE INDEX IF NOT EXISTS idx_promo_activations_user ON promo_activations(user_
 CREATE INDEX IF NOT EXISTS idx_chat_members_chat ON chat_members(chat_id);
 CREATE INDEX IF NOT EXISTS idx_arena_history_round ON arena_history(round_id);
 CREATE INDEX IF NOT EXISTS idx_arena_history_winner ON arena_history(winner_id);
+CREATE INDEX IF NOT EXISTS idx_temple_gifts_sender ON temple_gifts_history(sender_id);
+CREATE INDEX IF NOT EXISTS idx_temple_gifts_receiver ON temple_gifts_history(receiver_id);
 """
 
 

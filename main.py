@@ -13422,7 +13422,506 @@ async def process_p2p_and_admin_reply_message(message: types.Message):
                 ]
             ]
         )
-        await message.reply(conf_text, reply_markup=conf_kb, parse_mode=ParseMode.HTML)
+# ==============================================================================
+# --- ПОДАРОЧНЫЙ ХРАМ (GIFT TEMPLE) ---
+# ==============================================================================
+
+TEMPLE_GIFTS = {
+    "heart": {
+        "name": "Сердце",
+        "emoji": "💝",
+        "stars": 15,
+        "tg_gift_id": "5129992984518328325"
+    },
+    "bear": {
+        "name": "Мишка",
+        "emoji": "🧸",
+        "stars": 15,
+        "tg_gift_id": "5130095818987405325"
+    },
+    "box": {
+        "name": "Подарок",
+        "emoji": "🎁",
+        "stars": 25,
+        "tg_gift_id": "5130104271835365389"
+    },
+    "champagne": {
+        "name": "Шампанское",
+        "emoji": "🍾",
+        "stars": 50,
+        "tg_gift_id": "5130113849503383565"
+    },
+    "bouquet": {
+        "name": "Букет",
+        "emoji": "💐",
+        "stars": 50,
+        "tg_gift_id": "5130122439832240141"
+    },
+    "ring": {
+        "name": "Кольцо",
+        "emoji": "💍",
+        "stars": 100,
+        "tg_gift_id": "5130131030169403405"
+    }
+}
+
+_temple_user_target = {}
+_temple_user_comment = {}
+_temple_waiting_comment = {}
+_temple_waiting_target = set()
+
+
+def get_temple_stats(user_id: int) -> dict:
+    try:
+        cursor.execute("SELECT gifts_sent, stars_spent FROM temple_user_stats WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        if row:
+            return {"gifts_sent": row[0] or 0, "stars_spent": row[1] or 0}
+        return {"gifts_sent": 0, "stars_spent": 0}
+    except Exception:
+        return {"gifts_sent": 0, "stars_spent": 0}
+
+
+def record_temple_gift(sender_id: int, receiver_id: int, gift_key: str, gift_name: str, stars_cost: int, comment: str = ""):
+    now_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+    try:
+        cursor.execute("""
+            INSERT INTO temple_user_stats (user_id, gifts_sent, stars_spent, updated_at)
+            VALUES (?, 1, ?, ?)
+            ON CONFLICT (user_id) DO UPDATE SET
+                gifts_sent = temple_user_stats.gifts_sent + 1,
+                stars_spent = temple_user_stats.stars_spent + EXCLUDED.stars_spent,
+                updated_at = EXCLUDED.updated_at
+        """, (sender_id, stars_cost, now_str))
+        
+        cursor.execute("""
+            INSERT INTO temple_gifts_history (sender_id, receiver_id, gift_key, gift_name, stars_cost, comment, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (sender_id, receiver_id, gift_key, gift_name, stars_cost, comment or "", now_str))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Error recording temple gift: {e}")
+
+
+async def deliver_telegram_gift(user_id: int, gift_key: str, comment: str = ""):
+    gift_info = TEMPLE_GIFTS.get(gift_key)
+    if not gift_info:
+        return False
+    try:
+        if hasattr(bot, "get_available_gifts"):
+            gifts_res = await bot.get_available_gifts()
+            gifts_list = getattr(gifts_res, "gifts", [])
+            for g in gifts_list:
+                if getattr(g, "star_count", 0) == gift_info["stars"]:
+                    if hasattr(bot, "send_gift"):
+                        await bot.send_gift(user_id=user_id, gift_id=g.id, text=comment if comment else None)
+                        return True
+    except Exception as e:
+        logger.warning(f"deliver_telegram_gift note: {e}")
+
+    try:
+        if hasattr(bot, "send_gift"):
+            await bot.send_gift(user_id=user_id, gift_id=gift_info["tg_gift_id"], text=comment if comment else None)
+            return True
+    except Exception as e:
+        logger.warning(f"direct send_gift note: {e}")
+
+    return False
+
+
+async def resolve_temple_target(message: types.Message, raw_target: str) -> Optional[int]:
+    if not raw_target:
+        if message.reply_to_message and message.reply_to_message.from_user:
+            return message.reply_to_message.from_user.id
+        return None
+    
+    clean_target = raw_target.strip()
+    if clean_target.startswith("@"):
+        clean_uname = clean_target[1:].lower()
+        u = get_user_by_username(clean_uname)
+        if u:
+            return u["user_id"]
+        try:
+            chat = await bot.get_chat(clean_target)
+            if chat and chat.id:
+                get_user(chat.id)
+                return chat.id
+        except Exception:
+            pass
+        return None
+    elif clean_target.isdigit():
+        uid = int(clean_target)
+        get_user(uid)
+        return uid
+    else:
+        u = get_user_by_username(clean_target)
+        if u:
+            return u["user_id"]
+        try:
+            chat = await bot.get_chat(f"@{clean_target}")
+            if chat and chat.id:
+                get_user(chat.id)
+                return chat.id
+        except Exception:
+            pass
+        return None
+
+
+async def show_temple_target_selected(event, sender_id: int, sender_name: str, target_id: int, edit: bool = False):
+    sender_link = get_user_mention(sender_id, sender_name)
+    target_link = get_user_mention(target_id)
+    text = (
+        f'{sender_link}\n'
+        f'<tg-emoji emoji-id="5472096095280569232">🎁</tg-emoji> Получатель {target_link} успешно выбран!'
+    )
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Отправить подарок",
+                    callback_data=f"temple_gifts_{target_id}",
+                    style="success",
+                    icon_custom_emoji_id="5846184826184408721"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Сменить получателя",
+                    callback_data="temple_change_target",
+                    style="danger",
+                    icon_custom_emoji_id="5264727218734524899"
+                )
+            ]
+        ]
+    )
+    if edit and isinstance(event, types.CallbackQuery):
+        try:
+            await event.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+            return
+        except Exception:
+            pass
+    if isinstance(event, types.CallbackQuery):
+        await event.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    else:
+        await event.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+
+# --- TEMPLE COMMANDS & CALLBACKS ---
+
+@dp.message(Command("temple", "храм"))
+@dp.message(lambda message: message.text and re.match(r'^[!/.]?(храм|temple)(\s+|$)', message.text, re.IGNORECASE))
+async def cmd_temple(message: types.Message):
+    user_id = message.from_user.id
+    raw_text = message.text.strip()
+    parts = re.split(r'\s+', raw_text, maxsplit=1)
+    
+    # If target specified (e.g. "храм @kleymorf" or reply)
+    if len(parts) > 1 or (message.reply_to_message and message.reply_to_message.from_user):
+        arg = parts[1].strip() if len(parts) > 1 else ""
+        target_id = await resolve_temple_target(message, arg)
+        if not target_id:
+            await message.reply("<i>Пользователь не найден! Укажите корректный @username или ID.</i>", parse_mode=ParseMode.HTML)
+            return
+        if target_id == user_id:
+            await message.reply("<i>Нельзя отправить подарок самому себе!</i>", parse_mode=ParseMode.HTML)
+            return
+        _temple_user_target[user_id] = target_id
+        await show_temple_target_selected(message, user_id, message.from_user.first_name, target_id)
+        return
+
+    # No target: show main temple intro
+    text = (
+        '[NEW] <tg-emoji emoji-id="5834781387365818180">🎁</tg-emoji><b> Подарочный храм</b>\n\n'
+        '<tg-emoji emoji-id="5942877472163892475">👥</tg-emoji> В подарочном храме ты сможешь:\n'
+        '<i>Отправлять подарки своим друзьям.\n'
+        'Разыгрывать подарки среди игроков.</i>'
+    )
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Войти",
+                    callback_data="temple_enter",
+                    style="success",
+                    icon_custom_emoji_id="5258084656674250503"
+                )
+            ]
+        ]
+    )
+    await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+
+@dp.callback_query(lambda c: c.data == "temple_enter")
+async def cb_temple_enter(callback: types.CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    user_link = get_user_mention(user_id, callback.from_user.first_name)
+    
+    # Send sticker and delete after 2 seconds
+    sticker_id = "CAACAgUAAxkBAAERq7xqdMNBP-oO2yCEC4DAChXoLQVFjgACCgQAAjHHqVblSt_BbuOy8D0E"
+    try:
+        st_msg = await callback.message.answer_sticker(sticker_id)
+        await asyncio.sleep(2)
+        try:
+            await callback.bot.delete_message(chat_id=callback.message.chat.id, message_id=st_msg.message_id)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    stats = get_temple_stats(user_id)
+    text = (
+        f'{user_link}\n'
+        f'<tg-emoji emoji-id="5951637899777677904">👋</tg-emoji> Добро пожаловать в подарочный храм!\n\n'
+        f'<tg-emoji emoji-id="5422360266618707867">📊</tg-emoji> Твоя статистика\n'
+        f'<blockquote> <tg-emoji emoji-id="5357134848857241750">⬜️</tg-emoji>Отправлено подарков: {stats["gifts_sent"]}</blockquote>\n'
+        f'<blockquote><tg-emoji emoji-id="5463289097336405244">⭐️</tg-emoji>Потрачено звезд: {stats["stars_spent"]}</blockquote>\n\n'
+        f'<b>Для того чтобы отправить подарок пользователю введи команда <code>храм &lt;username/id&gt;</code></b>'
+    )
+    await callback.message.answer(text, parse_mode=ParseMode.HTML)
+
+
+@dp.callback_query(lambda c: c.data == "temple_change_target")
+async def cb_temple_change_target(callback: types.CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    _temple_waiting_target.add(user_id)
+    user_link = get_user_mention(user_id, callback.from_user.first_name)
+    text = (
+        f'{user_link}\n'
+        f'<tg-emoji emoji-id="5472096095280569232">🎁</tg-emoji> Отправьте @username или ID нового получателя (или введите <code>храм &lt;username/id&gt;</code>):'
+    )
+    try:
+        await callback.message.edit_text(text, parse_mode=ParseMode.HTML)
+    except Exception:
+        await callback.message.answer(text, parse_mode=ParseMode.HTML)
+
+
+@dp.callback_query(lambda c: c.data.startswith("temple_back_target_"))
+async def cb_temple_back_target(callback: types.CallbackQuery):
+    await callback.answer()
+    target_id = int(callback.data.replace("temple_back_target_", ""))
+    user_id = callback.from_user.id
+    await show_temple_target_selected(callback, user_id, callback.from_user.first_name, target_id, edit=True)
+
+
+@dp.callback_query(lambda c: c.data.startswith("temple_gifts_"))
+async def cb_temple_gifts(callback: types.CallbackQuery):
+    await callback.answer()
+    target_id = int(callback.data.replace("temple_gifts_", ""))
+    user_id = callback.from_user.id
+    user_link = get_user_mention(user_id, callback.from_user.first_name)
+    target_link = get_user_mention(target_id)
+    
+    text = (
+        f'{user_link}\n'
+        f'<tg-emoji emoji-id="5474371208176737086">✉️</tg-emoji> Выберите подарок которой вы хотите подарить {target_link}'
+    )
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="💝", callback_data=f"temple_sel_{target_id}_heart"),
+                InlineKeyboardButton(text="🧸", callback_data=f"temple_sel_{target_id}_bear"),
+                InlineKeyboardButton(text="🎁", callback_data=f"temple_sel_{target_id}_box"),
+            ],
+            [
+                InlineKeyboardButton(text="🍾", callback_data=f"temple_sel_{target_id}_champagne"),
+                InlineKeyboardButton(text="💐", callback_data=f"temple_sel_{target_id}_bouquet"),
+                InlineKeyboardButton(text="💍", callback_data=f"temple_sel_{target_id}_ring"),
+            ],
+            [
+                InlineKeyboardButton(text="« Назад", callback_data=f"temple_back_target_{target_id}")
+            ]
+        ]
+    )
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+
+@dp.callback_query(lambda c: c.data.startswith("temple_sel_"))
+async def cb_temple_select_gift(callback: types.CallbackQuery):
+    await callback.answer()
+    parts = callback.data.replace("temple_sel_", "").split("_")
+    target_id = int(parts[0])
+    gift_key = parts[1]
+    user_id = callback.from_user.id
+    
+    gift = TEMPLE_GIFTS.get(gift_key, TEMPLE_GIFTS["heart"])
+    user_link = get_user_mention(user_id, callback.from_user.first_name)
+    target_link = get_user_mention(target_id)
+    
+    comment = _temple_user_comment.get(user_id, "")
+    comment_block = f'\n<blockquote>💬 <b>Комментарий:</b> <i>{html.escape(comment)}</i></blockquote>\n' if comment else '\n'
+
+    text = (
+        f'{user_link}\n'
+        f'<tg-emoji emoji-id="5472248119942979457">🤔</tg-emoji> Вы хотите отправить подарок <b>{gift["emoji"]} {gift["name"]} ({gift["stars"]}⭐️)</b> пользователю {target_link}?\n'
+        f'{comment_block}\n'
+        f'<blockquote><i>Если хотите добавить комментарий к подарку, то нажмите кнопку ниже, если хотите без комментария просто проигнорируйте данное сообщение</i></blockquote>'
+    )
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Отправить", callback_data=f"temple_pay_{target_id}_{gift_key}", style="primary"),
+                InlineKeyboardButton(text="Добавить комментарий" if not comment else "Изменить комментарий", callback_data=f"temple_com_{target_id}_{gift_key}", style="primary")
+            ],
+            [
+                InlineKeyboardButton(text="« Назад", callback_data=f"temple_gifts_{target_id}")
+            ]
+        ]
+    )
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+
+@dp.callback_query(lambda c: c.data.startswith("temple_com_"))
+async def cb_temple_add_comment(callback: types.CallbackQuery):
+    await callback.answer()
+    parts = callback.data.replace("temple_com_", "").split("_")
+    target_id = int(parts[0])
+    gift_key = parts[1]
+    user_id = callback.from_user.id
+    
+    _temple_waiting_comment[user_id] = (target_id, gift_key)
+    user_link = get_user_mention(user_id, callback.from_user.first_name)
+    text = (
+        f'{user_link}\n'
+        f'✍️ <b>Напишите комментарий к подарку в чат:</b>'
+    )
+    await callback.message.answer(text, parse_mode=ParseMode.HTML)
+
+
+@dp.callback_query(lambda c: c.data.startswith("temple_pay_"))
+async def cb_temple_pay(callback: types.CallbackQuery):
+    await callback.answer()
+    parts = callback.data.replace("temple_pay_", "").split("_")
+    target_id = int(parts[0])
+    gift_key = parts[1]
+    user_id = callback.from_user.id
+    
+    gift = TEMPLE_GIFTS.get(gift_key, TEMPLE_GIFTS["heart"])
+    target_name = get_user_display_name(target_id)
+    
+    payload = f"temple_gift_{user_id}_{target_id}_{gift_key}_{secrets.token_hex(4)}"
+    title = f"Подарок {gift['emoji']} {gift['name']}"
+    description = f"Оплата подарка {gift['name']} пользователю {target_name}"
+    
+    try:
+        await callback.message.answer_invoice(
+            title=title,
+            description=description,
+            payload=payload,
+            currency="XTR",
+            prices=[types.LabeledPrice(label=f"{gift['emoji']} {gift['name']}", amount=gift["stars"])],
+            provider_token=""
+        )
+    except Exception as e:
+        await callback.answer(f"Ошибка создания счета: {e}", show_alert=True)
+
+
+@dp.pre_checkout_query(lambda q: q.invoice_payload and q.invoice_payload.startswith("temple_gift_"))
+async def cb_temple_pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
+    await pre_checkout_query.answer(ok=True)
+
+
+@dp.message(lambda m: m.successful_payment and m.successful_payment.invoice_payload and m.successful_payment.invoice_payload.startswith("temple_gift_"))
+async def cb_temple_successful_payment(message: types.Message):
+    payload = message.successful_payment.invoice_payload
+    parts = payload.split("_")
+    if len(parts) < 6:
+        return
+    sender_id = int(parts[2])
+    target_id = int(parts[3])
+    gift_key = parts[4]
+    
+    gift = TEMPLE_GIFTS.get(gift_key, TEMPLE_GIFTS["heart"])
+    comment = _temple_user_comment.pop(sender_id, "")
+    
+    record_temple_gift(sender_id, target_id, gift_key, gift["name"], gift["stars"], comment)
+    
+    # Attempt real Telegram gift delivery
+    asyncio.create_task(deliver_telegram_gift(target_id, gift_key, comment))
+    
+    sender_link = get_user_mention(sender_id, message.from_user.first_name)
+    succ_text = (
+        f'{sender_link}\n'
+        f'<tg-emoji emoji-id="5472180551517477902">✅</tg-emoji> Ваша заявка обрабатывается!'
+    )
+    await message.answer(succ_text, parse_mode=ParseMode.HTML)
+    
+    # Notify recipient
+    try:
+        target_notify = (
+            f'🎉 <b>Вам пришёл подарок {gift["emoji"]} {gift["name"]}!</b>\n'
+            f'👤 От: {sender_link}\n'
+        )
+        if comment:
+            target_notify += f'💬 <i>«{html.escape(comment)}»</i>'
+        await bot.send_message(chat_id=target_id, text=target_notify, parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+
+
+@dp.message(lambda message: message.text and (
+    message.from_user.id in _temple_waiting_comment or
+    message.from_user.id in _temple_waiting_target
+))
+async def process_temple_text_input(message: types.Message):
+    user_id = message.from_user.id
+    raw_text = message.text.strip()
+
+    # If user sent a command, cancel waiting state and let other handlers process
+    if raw_text.startswith("/") and not raw_text.lower().startswith(("/храм", "/temple")):
+        _temple_waiting_comment.pop(user_id, None)
+        _temple_waiting_target.discard(user_id)
+        return
+    
+    if user_id in _temple_waiting_comment:
+        target_id, gift_key = _temple_waiting_comment.pop(user_id)
+        _temple_user_comment[user_id] = raw_text
+        gift = TEMPLE_GIFTS.get(gift_key, TEMPLE_GIFTS["heart"])
+        user_link = get_user_mention(user_id, message.from_user.first_name)
+        target_link = get_user_mention(target_id)
+        text = (
+            f'{user_link}\n'
+            f'<tg-emoji emoji-id="5472248119942979457">🤔</tg-emoji> Вы хотите отправить подарок <b>{gift["emoji"]} {gift["name"]} ({gift["stars"]}⭐️)</b> пользователю {target_link}?\n\n'
+            f'<blockquote>💬 <b>Комментарий:</b> <i>{html.escape(raw_text)}</i></blockquote>\n\n'
+            f'<blockquote><i>Если хотите изменить комментарий, нажмите кнопку ниже</i></blockquote>'
+        )
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="Отправить", callback_data=f"temple_pay_{target_id}_{gift_key}", style="primary"),
+                    InlineKeyboardButton(text="Изменить комментарий", callback_data=f"temple_com_{target_id}_{gift_key}", style="primary")
+                ],
+                [
+                    InlineKeyboardButton(text="« Назад", callback_data=f"temple_gifts_{target_id}")
+                ]
+            ]
+        )
+        await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        return
+
+    if user_id in _temple_waiting_target:
+        _temple_waiting_target.discard(user_id)
+        # Strip command prefix if user wrote "храм @username"
+        lookup_target = raw_text
+        if lookup_target.lower().startswith(("храм ", "/храм ", "!храм ", "temple ", "/temple ")):
+            lookup_target = lookup_target.split(None, 1)[1].strip()
+        
+        target_user = await resolve_temple_target(message, lookup_target)
+        if not target_user:
+            await message.reply("<i>Пользователь не найден! Укажите корректный @username или ID.</i>", parse_mode=ParseMode.HTML)
+            return
+        if target_user == user_id:
+            await message.reply("<i>Нельзя выбрать самого себя!</i>", parse_mode=ParseMode.HTML)
+            return
+        _temple_user_target[user_id] = target_user
+        await show_temple_target_selected(message, user_id, message.from_user.first_name, target_user)
         return
 
 
