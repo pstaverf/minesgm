@@ -7,6 +7,7 @@ import json
 import html
 import math
 import urllib.parse
+from typing import Optional
 from arena_engine import arena_engine
 from asset_rotator import asset_rotator
 from datetime import datetime, timedelta, timezone
