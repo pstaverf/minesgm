@@ -13570,9 +13570,13 @@ async def resolve_temple_target(message: types.Message, raw_target: str) -> Opti
 async def show_temple_target_selected(event, sender_id: int, sender_name: str, target_id: int, edit: bool = False):
     sender_link = get_user_mention(sender_id, sender_name)
     target_link = get_user_mention(target_id)
+    if sender_id == target_id:
+        target_str = "<b>самого себя</b>"
+    else:
+        target_str = target_link
     text = (
         f'{sender_link}\n'
-        f'<tg-emoji emoji-id="5472096095280569232">🎁</tg-emoji> Получатель {target_link} успешно выбран!'
+        f'<tg-emoji emoji-id="5472096095280569232">🎁</tg-emoji> Получатель {target_str} успешно выбран!'
     )
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -13621,9 +13625,6 @@ async def cmd_temple(message: types.Message):
         target_id = await resolve_temple_target(message, arg)
         if not target_id:
             await message.reply("<i>Пользователь не найден! Укажите корректный @username или ID.</i>", parse_mode=ParseMode.HTML)
-            return
-        if target_id == user_id:
-            await message.reply("<i>Нельзя отправить подарок самому себе!</i>", parse_mode=ParseMode.HTML)
             return
         _temple_user_target[user_id] = target_id
         await show_temple_target_selected(message, user_id, message.from_user.first_name, target_id)
@@ -13678,7 +13679,18 @@ async def cb_temple_enter(callback: types.CallbackQuery):
         f'<blockquote><tg-emoji emoji-id="5463289097336405244">⭐️</tg-emoji>Потрачено звезд: {stats["stars_spent"]}</blockquote>\n\n'
         f'<b>Для того чтобы отправить подарок пользователю введи команда <code>храм &lt;username/id&gt;</code></b>'
     )
-    await callback.message.answer(text, parse_mode=ParseMode.HTML)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🎁 Подарить себе",
+                    callback_data=f"temple_gifts_{user_id}",
+                    style="success"
+                )
+            ]
+        ]
+    )
+    await callback.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 
 @dp.callback_query(lambda c: c.data == "temple_change_target")
@@ -13689,7 +13701,7 @@ async def cb_temple_change_target(callback: types.CallbackQuery):
     user_link = get_user_mention(user_id, callback.from_user.first_name)
     text = (
         f'{user_link}\n'
-        f'<tg-emoji emoji-id="5472096095280569232">🎁</tg-emoji> Отправьте @username или ID нового получателя (или введите <code>храм &lt;username/id&gt;</code>):'
+        f'<tg-emoji emoji-id="5472096095280569232">🎁</tg-emoji> Отправьте @username или ID получателя (или введите <code>храм &lt;username/id&gt;</code>):'
     )
     try:
         await callback.message.edit_text(text, parse_mode=ParseMode.HTML)
@@ -13711,7 +13723,7 @@ async def cb_temple_gifts(callback: types.CallbackQuery):
     target_id = int(callback.data.replace("temple_gifts_", ""))
     user_id = callback.from_user.id
     user_link = get_user_mention(user_id, callback.from_user.first_name)
-    target_link = get_user_mention(target_id)
+    target_link = "самому себе" if target_id == user_id else get_user_mention(target_id)
     
     text = (
         f'{user_link}\n'
@@ -13750,7 +13762,7 @@ async def cb_temple_select_gift(callback: types.CallbackQuery):
     
     gift = TEMPLE_GIFTS.get(gift_key, TEMPLE_GIFTS["heart"])
     user_link = get_user_mention(user_id, callback.from_user.first_name)
-    target_link = get_user_mention(target_id)
+    target_link = "самому себе" if target_id == user_id else get_user_mention(target_id)
     
     comment = _temple_user_comment.get(user_id, "")
     comment_block = f'\n<blockquote>💬 <b>Комментарий:</b> <i>{html.escape(comment)}</i></blockquote>\n' if comment else '\n'
@@ -13804,7 +13816,7 @@ async def cb_temple_pay(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     
     gift = TEMPLE_GIFTS.get(gift_key, TEMPLE_GIFTS["heart"])
-    target_name = get_user_display_name(target_id)
+    target_name = "себе" if target_id == user_id else get_user_display_name(target_id)
     
     payload = f"temple_gift_{user_id}_{target_id}_{gift_key}_{secrets.token_hex(4)}"
     title = f"Подарок {gift['emoji']} {gift['name']}"
@@ -13854,16 +13866,27 @@ async def cb_temple_successful_payment(message: types.Message):
     await message.answer(succ_text, parse_mode=ParseMode.HTML)
     
     # Notify recipient
-    try:
-        target_notify = (
-            f'🎉 <b>Вам пришёл подарок {gift["emoji"]} {gift["name"]}!</b>\n'
-            f'👤 От: {sender_link}\n'
-        )
-        if comment:
-            target_notify += f'💬 <i>«{html.escape(comment)}»</i>'
-        await bot.send_message(chat_id=target_id, text=target_notify, parse_mode=ParseMode.HTML)
-    except Exception:
-        pass
+    if sender_id == target_id:
+        try:
+            self_notify = (
+                f'🎉 <b>Вы успешно подарили себе подарок {gift["emoji"]} {gift["name"]}!</b>\n'
+            )
+            if comment:
+                self_notify += f'💬 <i>«{html.escape(comment)}»</i>'
+            await message.answer(self_notify, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+    else:
+        try:
+            target_notify = (
+                f'🎉 <b>Вам пришёл подарок {gift["emoji"]} {gift["name"]}!</b>\n'
+                f'👤 От: {sender_link}\n'
+            )
+            if comment:
+                target_notify += f'💬 <i>«{html.escape(comment)}»</i>'
+            await bot.send_message(chat_id=target_id, text=target_notify, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
 
 
 @dp.message(lambda message: message.text and (
@@ -13885,7 +13908,7 @@ async def process_temple_text_input(message: types.Message):
         _temple_user_comment[user_id] = raw_text
         gift = TEMPLE_GIFTS.get(gift_key, TEMPLE_GIFTS["heart"])
         user_link = get_user_mention(user_id, message.from_user.first_name)
-        target_link = get_user_mention(target_id)
+        target_link = "самому себе" if target_id == user_id else get_user_mention(target_id)
         text = (
             f'{user_link}\n'
             f'<tg-emoji emoji-id="5472248119942979457">🤔</tg-emoji> Вы хотите отправить подарок <b>{gift["emoji"]} {gift["name"]} ({gift["stars"]}⭐️)</b> пользователю {target_link}?\n\n'
@@ -13916,9 +13939,6 @@ async def process_temple_text_input(message: types.Message):
         target_user = await resolve_temple_target(message, lookup_target)
         if not target_user:
             await message.reply("<i>Пользователь не найден! Укажите корректный @username или ID.</i>", parse_mode=ParseMode.HTML)
-            return
-        if target_user == user_id:
-            await message.reply("<i>Нельзя выбрать самого себя!</i>", parse_mode=ParseMode.HTML)
             return
         _temple_user_target[user_id] = target_user
         await show_temple_target_selected(message, user_id, message.from_user.first_name, target_user)
