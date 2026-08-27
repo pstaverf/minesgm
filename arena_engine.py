@@ -3,7 +3,6 @@ import random
 import secrets
 import time
 import json
-import sqlite3
 import urllib.parse
 from datetime import datetime, timezone, timedelta
 MSK_TZ = timezone(timedelta(hours=3))
@@ -20,8 +19,7 @@ ARENA_ZONE_COLORS = [
     "#6366f1",  
 ]
 class ArenaEngine:
-    def __init__(self, db_path='game.db'):
-        self.db_path = db_path
+    def __init__(self):
         self.init_db()
         self.current_round = None
         self.round_counter = self.get_max_round_id()
@@ -36,15 +34,15 @@ class ArenaEngine:
             cursor = conn.cursor()
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS arena_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                round_id INTEGER UNIQUE,
-                total_bank INTEGER,
-                winner_id INTEGER,
+                id BIGSERIAL PRIMARY KEY,
+                round_id BIGINT UNIQUE,
+                total_bank BIGINT,
+                winner_id BIGINT,
                 winner_name TEXT,
                 winner_username TEXT,
                 winner_avatar TEXT,
                 winner_color TEXT,
-                winner_bet INTEGER,
+                winner_bet BIGINT,
                 winner_share REAL,
                 players_json TEXT,
                 zones_json TEXT,
@@ -496,11 +494,24 @@ class ArenaEngine:
             with self.get_db() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                INSERT OR REPLACE INTO arena_history (
+                INSERT INTO arena_history (
                     round_id, total_bank, winner_id, winner_name, winner_username,
                     winner_avatar, winner_color, winner_bet, winner_share,
                     players_json, zones_json, ball_trajectory_json, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (round_id) DO UPDATE SET
+                    total_bank = EXCLUDED.total_bank,
+                    winner_id = EXCLUDED.winner_id,
+                    winner_name = EXCLUDED.winner_name,
+                    winner_username = EXCLUDED.winner_username,
+                    winner_avatar = EXCLUDED.winner_avatar,
+                    winner_color = EXCLUDED.winner_color,
+                    winner_bet = EXCLUDED.winner_bet,
+                    winner_share = EXCLUDED.winner_share,
+                    players_json = EXCLUDED.players_json,
+                    zones_json = EXCLUDED.zones_json,
+                    ball_trajectory_json = EXCLUDED.ball_trajectory_json,
+                    created_at = EXCLUDED.created_at
                 ''', (
                     round_id,
                     total_bank,

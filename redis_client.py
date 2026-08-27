@@ -2,23 +2,30 @@ import json
 import logging
 from db_config import REDIS_URL
 
+import time
+
 logger = logging.getLogger(__name__)
 
 _redis_pool = None
 _in_memory_cache = {}
+_last_failed_time = 0
 
 
 async def get_redis():
-    global _redis_pool
+    global _redis_pool, _last_failed_time
     if _redis_pool is not None:
         return _redis_pool
+    # Don't hammer unreachable server continuously (10s cooldown)
+    if time.time() - _last_failed_time < 10.0:
+        return None
     try:
         import redis.asyncio as aioredis
-        _redis_pool = aioredis.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=3.0)
+        _redis_pool = aioredis.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=2.0)
         await _redis_pool.ping()
         logger.info("Connected to Redis successfully!")
         return _redis_pool
     except Exception as e:
+        _last_failed_time = time.time()
         logger.warning(f"Redis unavailable ({e}), using in-memory fallback cache.")
         _redis_pool = None
         return None

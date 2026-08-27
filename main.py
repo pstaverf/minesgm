@@ -5,7 +5,6 @@ import random
 import re
 import json
 import html
-import sqlite3
 import math
 import urllib.parse
 from arena_engine import arena_engine
@@ -46,365 +45,14 @@ dp = Dispatcher()
 
 from pg_adapter import get_db_connection
 conn = get_db_connection()
-conn.create_function("lower", 1, lambda s: s.lower() if s is not None else None)
 cursor = conn.cursor()
 
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    username TEXT DEFAULT NULL,
-    balance INTEGER DEFAULT 0,
-    games INTEGER DEFAULT 0,
-    lost INTEGER DEFAULT 0,
-    bonus_time TEXT DEFAULT NULL,
-    registered_at TEXT DEFAULT NULL,
-    mp_balance INTEGER DEFAULT 0,
-    mp_daily_transferred INTEGER DEFAULT 0,
-    mp_daily_date TEXT DEFAULT NULL,
-    max_balance INTEGER DEFAULT 0
-)
-''')
-conn.commit()
-
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN first_name TEXT DEFAULT NULL")
-    conn.commit()
-except Exception:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN username TEXT DEFAULT NULL")
-    conn.commit()
-except Exception:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN registered_at TEXT DEFAULT NULL")
-    conn.commit()
-except Exception:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN mp_balance INTEGER DEFAULT 0")
-    conn.commit()
-except Exception:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN mp_daily_transferred INTEGER DEFAULT 0")
-    conn.commit()
-except Exception:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN mp_daily_date TEXT DEFAULT NULL")
-    conn.commit()
-except Exception:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN max_balance INTEGER DEFAULT 0")
-    conn.commit()
-except Exception:
-    pass
-
+# PostgreSQL Schema & Performance Indexes are automatically initialized via pg_adapter / db.py
 try:
     cursor.execute("UPDATE users SET max_balance = balance WHERE max_balance IS NULL OR max_balance < balance")
     conn.commit()
 except Exception:
     pass
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS mp_transfers_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sender_id INTEGER,
-    receiver_id INTEGER,
-    amount INTEGER,
-    created_at TEXT
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS chat_members (
-    user_id INTEGER,
-    chat_id INTEGER,
-    PRIMARY KEY (user_id, chat_id)
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS bans (
-    user_id INTEGER PRIMARY KEY,
-    reason TEXT,
-    until TEXT,
-    is_permanent INTEGER DEFAULT 0
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS games_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    game_type TEXT,
-    bet INTEGER,
-    result TEXT,
-    win_amount INTEGER DEFAULT 0,
-    created_at TEXT
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS transfers_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sender_id INTEGER,
-    receiver_id INTEGER,
-    amount INTEGER,
-    commission INTEGER DEFAULT 0,
-    created_at TEXT
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS game_stats (
-    user_id INTEGER PRIMARY KEY,
-    mines INTEGER DEFAULT 0,
-    tower INTEGER DEFAULT 0,
-    diamonds INTEGER DEFAULT 0,
-    crash INTEGER DEFAULT 0,
-    slots INTEGER DEFAULT 0,
-    bowling INTEGER DEFAULT 0,
-    darts INTEGER DEFAULT 0,
-    basketball INTEGER DEFAULT 0,
-    football INTEGER DEFAULT 0
-)
-''')
-conn.commit()
-
-for col in ["slots", "bowling", "darts", "basketball", "football", "twentyone"]:
-    try:
-        cursor.execute(f"ALTER TABLE game_stats ADD COLUMN {col} INTEGER DEFAULT 0")
-        conn.commit()
-    except Exception:
-        pass
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS active_games_state (
-    game_id INTEGER PRIMARY KEY,
-    owner_id INTEGER,
-    chat_id INTEGER,
-    game_type TEXT,
-    stage TEXT,
-    bet INTEGER,
-    mine_count INTEGER,
-    mine_positions TEXT,
-    revealed TEXT,
-    level INTEGER,
-    game_over INTEGER DEFAULT 0,
-    won INTEGER DEFAULT 0,
-    exploded_mine INTEGER DEFAULT NULL,
-    created_at TEXT
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS promo_codes (
-    code TEXT PRIMARY KEY,
-    reward INTEGER,
-    total_activations INTEGER,
-    remaining_activations INTEGER,
-    created_at TEXT
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS promo_activations (
-    code TEXT,
-    user_id INTEGER,
-    activated_at TEXT,
-    PRIMARY KEY (code, user_id)
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS top_bans (
-    user_id INTEGER PRIMARY KEY,
-    banned_at TEXT
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS transfer_bans (
-    user_id INTEGER PRIMARY KEY,
-    banned_at TEXT
-)
-''')
-conn.commit()
-
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN ref_earned INTEGER DEFAULT 0")
-    conn.commit()
-except Exception:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN ref_count INTEGER DEFAULT 0")
-    conn.commit()
-except Exception:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN referred_by INTEGER DEFAULT NULL")
-    conn.commit()
-except Exception:
-    pass
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS time_deposits (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    amount INTEGER,
-    days INTEGER,
-    percent REAL,
-    profit INTEGER,
-    is_locked INTEGER DEFAULT 0,
-    status TEXT DEFAULT 'active',
-    created_at TEXT,
-    end_at TEXT,
-    created_at_dt TEXT,
-    end_at_dt TEXT
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS savings_accounts (
-    user_id INTEGER PRIMARY KEY,
-    balance INTEGER DEFAULT 0,
-    accumulated_interest REAL DEFAULT 0.0,
-    total_earned INTEGER DEFAULT 0,
-    last_accrual TEXT
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS savings_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    type TEXT,
-    amount INTEGER,
-    created_at TEXT
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS bank_settings (
-    user_id INTEGER PRIMARY KEY,
-    notifications_enabled INTEGER DEFAULT 1
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS referrals (
-    referrer_id INTEGER,
-    referral_id INTEGER PRIMARY KEY,
-    is_active INTEGER DEFAULT 0,
-    bonus_paid INTEGER DEFAULT 0,
-    earned_from_losses INTEGER DEFAULT 0,
-    joined_at TEXT
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS p2p_accounts (
-    user_id INTEGER PRIMARY KEY,
-    mcoin_balance INTEGER DEFAULT 0,
-    mp_balance INTEGER DEFAULT 0,
-    rating INTEGER DEFAULT 0,
-    deals_count INTEGER DEFAULT 0,
-    last_deposit_date TEXT DEFAULT NULL,
-    sell_order_active INTEGER DEFAULT 0,
-    sell_price INTEGER DEFAULT 0,
-    buy_order_active INTEGER DEFAULT 0,
-    buy_price INTEGER DEFAULT 0
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS p2p_deals_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    buyer_id INTEGER,
-    seller_id INTEGER,
-    amount_mp INTEGER,
-    price_per_mp INTEGER,
-    total_mcoin INTEGER,
-    commission INTEGER DEFAULT 0,
-    created_at TEXT
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS p2p_deal_ratings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    deal_id INTEGER,
-    rater_id INTEGER,
-    target_id INTEGER,
-    rating_change INTEGER,
-    created_at TEXT,
-    UNIQUE(deal_id, rater_id)
-)
-''')
-conn.commit()
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS p2p_bot_stats (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    amount_mp INTEGER,
-    amount_mcoin INTEGER,
-    created_at TEXT
-)
-''')
-conn.commit()
-
-# Database Performance Pragmas
-cursor.execute("PRAGMA journal_mode = WAL")
-cursor.execute("PRAGMA synchronous = NORMAL")
-cursor.execute("PRAGMA temp_store = MEMORY")
-cursor.execute("PRAGMA mmap_size = 268435456")
-cursor.execute("PRAGMA cache_size = -64000")
-
-# Database Indexes
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_balance ON users(balance DESC)")
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_max_balance ON users(max_balance DESC)")
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_members_chat ON chat_members(chat_id, user_id)")
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_games_history_user ON games_history(user_id, id DESC)")
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_transfers_sender ON transfers_history(sender_id)")
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_transfers_receiver ON transfers_history(receiver_id)")
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_mp_transfers_sender ON mp_transfers_history(sender_id)")
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_mp_transfers_receiver ON mp_transfers_history(receiver_id)")
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_promo_code ON promo_codes(code)")
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_promo_act ON promo_activations(code, user_id)")
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_time_deposits_user ON time_deposits(user_id, status)")
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id)")
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_p2p_sell ON p2p_accounts(sell_order_active, sell_price ASC)")
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_p2p_buy ON p2p_accounts(buy_order_active, buy_price DESC)")
-conn.commit()
 
 # High-Speed In-Memory Caches
 _known_usernames = {}
@@ -448,7 +96,7 @@ def ban_user_top(user_id):
     _top_banned_users.add(user_id)
     now_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
     try:
-        cursor.execute("INSERT OR REPLACE INTO top_bans (user_id, banned_at) VALUES (?, ?)", (user_id, now_str))
+        cursor.execute("INSERT INTO top_bans (user_id, banned_at) VALUES (?, ?) ON CONFLICT (user_id) DO UPDATE SET banned_at = EXCLUDED.banned_at", (user_id, now_str))
         conn.commit()
         return True
     except Exception:
@@ -473,7 +121,7 @@ def ban_user_transfers(user_id):
     _transfer_banned_users.add(user_id)
     now_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
     try:
-        cursor.execute("INSERT OR REPLACE INTO transfer_bans (user_id, banned_at) VALUES (?, ?)", (user_id, now_str))
+        cursor.execute("INSERT INTO transfer_bans (user_id, banned_at) VALUES (?, ?) ON CONFLICT (user_id) DO UPDATE SET banned_at = EXCLUDED.banned_at", (user_id, now_str))
         conn.commit()
         return True
     except Exception:
@@ -523,7 +171,7 @@ def get_user(user_id):
         cursor.execute('INSERT INTO users (user_id, balance, games, lost, bonus_time, username, registered_at, mp_balance, mp_daily_transferred, mp_daily_date, ref_earned, ref_count, referred_by, max_balance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (user_id, 0, 0, 0, None, None, reg_time, 0, 0, None, 0, 0, None, 0))
         conn.commit()
         return {"balance": 0, "games": 0, "lost": 0, "bonus_time": None, "username": None, "registered_at": reg_time, "mp_balance": 0, "mp_daily_transferred": 0, "mp_daily_date": None, "ref_earned": 0, "ref_count": 0, "referred_by": None, "max_balance": 0, "first_name": None}
-    except sqlite3.Error:
+    except Exception:
         return {"balance": 0, "games": 0, "lost": 0, "bonus_time": None, "username": None, "registered_at": None, "mp_balance": 0, "mp_daily_transferred": 0, "mp_daily_date": None, "ref_earned": 0, "ref_count": 0, "referred_by": None, "max_balance": 0, "first_name": None}
 
 
@@ -535,7 +183,7 @@ def update_user(user_id, balance=None, games=None, lost=None, bonus_time=None, u
             updates.append("balance = ?")
             params.append(balance)
             if max_balance is None:
-                updates.append("max_balance = MAX(COALESCE(max_balance, 0), ?)")
+                updates.append("max_balance = GREATEST(COALESCE(max_balance, 0), ?)")
                 params.append(balance)
         if max_balance is not None:
             updates.append("max_balance = ?")
@@ -583,7 +231,7 @@ def update_user(user_id, balance=None, games=None, lost=None, bonus_time=None, u
             conn.commit()
             return True
         return False
-    except sqlite3.Error:
+    except Exception:
         return False
 
 
@@ -748,8 +396,13 @@ def check_user_ban(user_id):
 def ban_user(user_id, reason, until_dt=None, is_permanent=False):
     try:
         until_str = until_dt.isoformat() if until_dt else None
-        cursor.execute('INSERT OR REPLACE INTO bans (user_id, reason, until, is_permanent) VALUES (?, ?, ?, ?)',
-                       (user_id, reason, until_str, 1 if is_permanent else 0))
+        cursor.execute('''
+            INSERT INTO bans (user_id, reason, until, is_permanent) VALUES (?, ?, ?, ?)
+            ON CONFLICT (user_id) DO UPDATE SET
+                reason = EXCLUDED.reason,
+                until = EXCLUDED.until,
+                is_permanent = EXCLUDED.is_permanent
+        ''', (user_id, reason, until_str, 1 if is_permanent else 0))
         conn.commit()
         if is_permanent:
             _banned_users_cache[user_id] = {"reason": reason, "until_str": "Навсегда", "until_dt": None, "is_perm": True}
@@ -801,7 +454,7 @@ def add_game_history(user_id, game_type, bet, result, win_amount=0, created_at_s
             VALUES (?, ?, ?, ?, ?, ?)
         ''', (user_id, game_type, bet, result, win_amount, created_at_str))
         
-        cursor.execute('INSERT OR IGNORE INTO game_stats (user_id) VALUES (?)', (user_id,))
+        cursor.execute('INSERT INTO game_stats (user_id) VALUES (?) ON CONFLICT (user_id) DO NOTHING', (user_id,))
         if game_type in ["mines", "tower", "diamonds", "crash", "slots", "bowling", "darts", "basketball", "football", "twentyone"]:
             cursor.execute(f'UPDATE game_stats SET {game_type} = {game_type} + 1 WHERE user_id = ?', (user_id,))
         conn.commit()
@@ -896,7 +549,7 @@ def toggle_bank_notifications(user_id):
     try:
         cur = get_bank_settings(user_id)["notifications_enabled"]
         new_val = 0 if cur else 1
-        cursor.execute("INSERT OR REPLACE INTO bank_settings (user_id, notifications_enabled) VALUES (?, ?)", (user_id, new_val))
+        cursor.execute("INSERT INTO bank_settings (user_id, notifications_enabled) VALUES (?, ?) ON CONFLICT (user_id) DO UPDATE SET notifications_enabled = EXCLUDED.notifications_enabled", (user_id, new_val))
         conn.commit()
         return bool(new_val)
     except Exception:
@@ -1021,7 +674,7 @@ def withdraw_time_deposit(dep_id, user_id):
         if cursor.rowcount == 0:
             return False, "Депозит уже закрыт или заблокирован!"
 
-        cursor.execute("UPDATE users SET balance = balance + ?, max_balance = MAX(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ?", (amount, amount, user_id))
+        cursor.execute("UPDATE users SET balance = balance + ?, max_balance = GREATEST(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ?", (amount, amount, user_id))
         conn.commit()
         return True, amount
     except Exception as e:
@@ -1044,7 +697,7 @@ def withdraw_all_time_deposits(user_id):
         if total_withdrawn <= 0:
             return False, "Нет доступных для досрочного снятия депозитов!"
 
-        cursor.execute("UPDATE users SET balance = balance + ?, max_balance = MAX(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ?", (total_withdrawn, total_withdrawn, user_id))
+        cursor.execute("UPDATE users SET balance = balance + ?, max_balance = GREATEST(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ?", (total_withdrawn, total_withdrawn, user_id))
         conn.commit()
         return True, total_withdrawn
     except Exception as e:
@@ -1111,14 +764,14 @@ def withdraw_from_savings(user_id, amount):
         cursor.execute('''
             UPDATE savings_accounts
             SET balance = balance - ?,
-                accumulated_interest = MAX(0.0, accumulated_interest - ?),
+                accumulated_interest = GREATEST(0.0, accumulated_interest - ?),
                 total_earned = total_earned + ?
             WHERE user_id = ? AND balance >= ?
         ''', (balance_to_wd, interest_to_wd, interest_to_wd, user_id, balance_to_wd))
         if cursor.rowcount == 0:
             return False, "Недостаточно средств на накопительном счете!"
 
-        cursor.execute("UPDATE users SET balance = balance + ?, max_balance = MAX(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ?", (amount, amount, user_id))
+        cursor.execute("UPDATE users SET balance = balance + ?, max_balance = GREATEST(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ?", (amount, amount, user_id))
         now_str = datetime.now().strftime("%d-%m-%y %H:%M")
         cursor.execute("INSERT INTO savings_history (user_id, type, amount, created_at) VALUES (?, 'withdraw', ?, ?)", (user_id, amount, now_str))
         conn.commit()
@@ -1159,8 +812,9 @@ def register_referral(referrer_id, referral_id):
                 return False
         now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
         cursor.execute('''
-            INSERT OR IGNORE INTO referrals (referrer_id, referral_id, is_active, bonus_paid, earned_from_losses, joined_at)
+            INSERT INTO referrals (referrer_id, referral_id, is_active, bonus_paid, earned_from_losses, joined_at)
             VALUES (?, ?, 0, 0, 0, ?)
+            ON CONFLICT (referral_id) DO NOTHING
         ''', (referrer_id, referral_id, now_str))
         cursor.execute("UPDATE users SET referred_by = ? WHERE user_id = ?", (referrer_id, referral_id))
         conn.commit()
@@ -1338,10 +992,10 @@ def add_chat_member(user_id, chat_id):
         return True
     _known_chat_members.add(key)
     try:
-        cursor.execute('INSERT OR IGNORE INTO chat_members (user_id, chat_id) VALUES (?, ?)', (user_id, chat_id))
+        cursor.execute('INSERT INTO chat_members (user_id, chat_id) VALUES (?, ?) ON CONFLICT DO NOTHING', (user_id, chat_id))
         conn.commit()
         return True
-    except sqlite3.Error:
+    except Exception:
         return False
 
 
@@ -1365,7 +1019,7 @@ def get_top_users(limit=10, chat_id=None):
                 ORDER BY balance DESC LIMIT ?
             ''', (limit,))
         return cursor.fetchall()
-    except sqlite3.Error:
+    except Exception:
         return []
 
 
@@ -1392,7 +1046,7 @@ def get_user_rank(user_id, chat_id=None):
             ''', (user_id,))
         result = cursor.fetchone()
         return result[0] if result else 0
-    except sqlite3.Error:
+    except Exception:
         return 0
 
 
@@ -1638,9 +1292,23 @@ def save_active_game_to_db(game_id, g):
                 dt_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
         cursor.execute('''
-            INSERT OR REPLACE INTO active_games_state
+            INSERT INTO active_games_state
             (game_id, owner_id, chat_id, game_type, stage, bet, mine_count, mine_positions, revealed, level, game_over, won, exploded_mine, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (game_id) DO UPDATE SET
+                owner_id = EXCLUDED.owner_id,
+                chat_id = EXCLUDED.chat_id,
+                game_type = EXCLUDED.game_type,
+                stage = EXCLUDED.stage,
+                bet = EXCLUDED.bet,
+                mine_count = EXCLUDED.mine_count,
+                mine_positions = EXCLUDED.mine_positions,
+                revealed = EXCLUDED.revealed,
+                level = EXCLUDED.level,
+                game_over = EXCLUDED.game_over,
+                won = EXCLUDED.won,
+                exploded_mine = EXCLUDED.exploded_mine,
+                created_at = EXCLUDED.created_at
         ''', (
             game_id, g["owner_id"], g["chat_id"], g.get("type", "mines"), g.get("stage", "playing"),
             g.get("bet", 0), g.get("mine_count", 0), mp_json, rev_json, g.get("level", 0),
@@ -1648,6 +1316,11 @@ def save_active_game_to_db(game_id, g):
             g.get("exploded_mine"), dt_str
         ))
         conn.commit()
+        try:
+            from redis_client import redis_set_active_game
+            asyncio.create_task(redis_set_active_game(g["owner_id"], game_id, g))
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -1656,6 +1329,14 @@ def remove_active_game_from_db(game_id):
     try:
         cursor.execute('DELETE FROM active_games_state WHERE game_id = ?', (game_id,))
         conn.commit()
+        try:
+            from redis_client import redis_remove_active_game
+            g = games.get(game_id)
+            owner_id = g["owner_id"] if g else 0
+            if owner_id:
+                asyncio.create_task(redis_remove_active_game(owner_id, game_id))
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -2852,7 +2533,9 @@ async def cmd_sn(message: types.Message):
         _top_banned_users.clear()
         _transfer_banned_users.clear()
         try:
-            cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ('games_history', 'transfers_history', 'mp_transfers_history')")
+            cursor.execute("ALTER SEQUENCE IF EXISTS games_history_id_seq RESTART WITH 1")
+            cursor.execute("ALTER SEQUENCE IF EXISTS transfers_history_id_seq RESTART WITH 1")
+            cursor.execute("ALTER SEQUENCE IF EXISTS mp_transfers_history_id_seq RESTART WITH 1")
         except Exception:
             pass
         conn.commit()
@@ -2998,8 +2681,13 @@ async def cmd_cprom(message: types.Message):
     now_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
     try:
         cursor.execute('''
-            INSERT OR REPLACE INTO promo_codes (code, reward, total_activations, remaining_activations, created_at)
+            INSERT INTO promo_codes (code, reward, total_activations, remaining_activations, created_at)
             VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (code) DO UPDATE SET
+                reward = EXCLUDED.reward,
+                total_activations = EXCLUDED.total_activations,
+                remaining_activations = EXCLUDED.remaining_activations,
+                created_at = EXCLUDED.created_at
         ''', (promo_name, reward, activations, activations, now_str))
         conn.commit()
 
@@ -11357,7 +11045,7 @@ def get_p2p_account(user_id):
     cursor.execute("SELECT user_id, mcoin_balance, mp_balance, rating, deals_count, last_deposit_date, sell_order_active, sell_price, buy_order_active, buy_price FROM p2p_accounts WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     if not row:
-        cursor.execute("INSERT OR IGNORE INTO p2p_accounts (user_id) VALUES (?)", (user_id,))
+        cursor.execute("INSERT INTO p2p_accounts (user_id) VALUES (?) ON CONFLICT (user_id) DO NOTHING", (user_id,))
         conn.commit()
         cursor.execute("SELECT user_id, mcoin_balance, mp_balance, rating, deals_count, last_deposit_date, sell_order_active, sell_price, buy_order_active, buy_price FROM p2p_accounts WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
@@ -11463,7 +11151,7 @@ def withdraw_from_p2p_mcoin(user_id, amount):
         if cursor.rowcount == 0:
             return False, "Недостаточно mCoin на балансе обменника!"
 
-        cursor.execute("UPDATE users SET balance = balance + ?, max_balance = MAX(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ?", (amount, amount, user_id))
+        cursor.execute("UPDATE users SET balance = balance + ?, max_balance = GREATEST(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ?", (amount, amount, user_id))
         conn.commit()
 
         updated_p2p = get_p2p_account(user_id)
@@ -11528,7 +11216,7 @@ def execute_p2p_buy_deal(buyer_id, seller_id, amount_mp):
             conn.commit()
             return False, "У продавца изменился баланс или заявка отключена!"
 
-        cursor.execute("UPDATE users SET balance = balance + ?, max_balance = MAX(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ?", (total_cost, total_cost, seller_id))
+        cursor.execute("UPDATE users SET balance = balance + ?, max_balance = GREATEST(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ?", (total_cost, total_cost, seller_id))
         cursor.execute("UPDATE users SET mp_balance = mp_balance + ? WHERE user_id = ?", (amount_mp, buyer_id))
         cursor.execute("UPDATE p2p_accounts SET deals_count = deals_count + 1 WHERE user_id = ?", (buyer_id,))
         now_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
@@ -11597,7 +11285,7 @@ def execute_p2p_sell_to_bot(user_id, amount_mp):
     total_mcoin = amount_mp * rate
     try:
         now_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        cursor.execute("UPDATE users SET mp_balance = mp_balance - ?, balance = balance + ?, max_balance = MAX(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ? AND mp_balance >= ?", (amount_mp, total_mcoin, total_mcoin, user_id, amount_mp))
+        cursor.execute("UPDATE users SET mp_balance = mp_balance - ?, balance = balance + ?, max_balance = GREATEST(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ? AND mp_balance >= ?", (amount_mp, total_mcoin, total_mcoin, user_id, amount_mp))
         if cursor.rowcount == 0:
             return False, "Недостаточно MP на балансе!"
 
@@ -11629,7 +11317,7 @@ def execute_p2p_sell_to_buyer(seller_id, buyer_id, amount_mp):
     total_mcoin = amount_mp * buyer_p2p["buy_price"]
 
     try:
-        cursor.execute("UPDATE users SET mp_balance = mp_balance - ?, balance = balance + ?, max_balance = MAX(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ? AND mp_balance >= ?", (amount_mp, total_mcoin, total_mcoin, seller_id, amount_mp))
+        cursor.execute("UPDATE users SET mp_balance = mp_balance - ?, balance = balance + ?, max_balance = GREATEST(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ? AND mp_balance >= ?", (amount_mp, total_mcoin, total_mcoin, seller_id, amount_mp))
         if cursor.rowcount == 0:
             return False, "Недостаточно MP на основном балансе!"
 
@@ -13718,7 +13406,7 @@ async def check_time_deposits_task():
                     cursor.execute("UPDATE time_deposits SET status = 'completed' WHERE id = ? AND status = 'active'", (dep_id,))
                     if cursor.rowcount > 0:
                         payout = amount + profit
-                        cursor.execute("UPDATE users SET balance = balance + ?, max_balance = MAX(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ?", (payout, payout, uid))
+                        cursor.execute("UPDATE users SET balance = balance + ?, max_balance = GREATEST(COALESCE(max_balance, 0), balance + ?) WHERE user_id = ?", (payout, payout, uid))
                         conn.commit()
 
                         settings = get_bank_settings(uid)

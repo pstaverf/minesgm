@@ -3,7 +3,6 @@ import sys
 import json
 import asyncio
 import logging
-import sqlite3
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 
@@ -13,8 +12,6 @@ logger = logging.getLogger(__name__)
 
 # Global connection pool
 _pg_pool = None
-_sqlite_conn = None
-_use_sqlite_fallback = False
 
 PG_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS users (
@@ -269,125 +266,61 @@ CREATE INDEX IF NOT EXISTS idx_arena_history_winner ON arena_history(winner_id);
 """
 
 
-def _get_sqlite_connection():
-    global _sqlite_conn
-    if _sqlite_conn is None:
-        _sqlite_conn = sqlite3.connect("game.db", check_same_thread=False)
-        _sqlite_conn.row_factory = sqlite3.Row
-    return _sqlite_conn
+def _prepare_pg_query(query: str) -> str:
+    """Formats placeholders from ? to $1, $2, ... for asyncpg."""
+    if "?" in query:
+        parts = query.split("?")
+        new_q = []
+        for i, p in enumerate(parts[:-1]):
+            new_q.append(f"{p}${i+1}")
+        new_q.append(parts[-1])
+        return "".join(new_q)
+    return query
 
 
 async def init_db_pool():
-    global _pg_pool, _use_sqlite_fallback
+    global _pg_pool
     if _pg_pool is not None:
         return _pg_pool
     try:
         import asyncpg
         _pg_pool = await asyncpg.create_pool(
             dsn=DATABASE_URL,
-            min_size=2,
+            min_size=1,
             max_size=20,
-            command_timeout=15.0,
-            timeout=5.0
+            command_timeout=30.0,
+            timeout=30.0
         )
         async with _pg_pool.acquire() as conn:
             await conn.execute(PG_SCHEMA_SQL)
-        logger.info("Connected to PostgreSQL pool and initialized schema successfully!")
-        _use_sqlite_fallback = False
+        logger.info("Connected to PostgreSQL pool and initialized schema successfully! 🚀")
         return _pg_pool
     except Exception as e:
-        logger.warning(f"PostgreSQL connection failed ({e}). Falling back to SQLite mode.")
-        _use_sqlite_fallback = True
-        return None
+        logger.error(f"PostgreSQL pool initialization failed: {e}")
+        raise
 
 
 async def execute(query: str, *args):
-    global _pg_pool, _use_sqlite_fallback
-    if not _use_sqlite_fallback:
-        pool = await init_db_pool()
-        if pool:
-            try:
-                # Convert SQLite ? placeholders to PostgreSQL $1, $2, ... if needed
-                pg_query = query
-                if "?" in pg_query:
-                    parts = pg_query.split("?")
-                    new_q = []
-                    for i, p in enumerate(parts[:-1]):
-                        new_q.append(f"{p}${i+1}")
-                    new_q.append(parts[-1])
-                    pg_query = "".join(new_q)
-                async with pool.acquire() as conn:
-                    return await conn.execute(pg_query, *args)
-            except Exception as e:
-                logger.error(f"PG Execute error: {e}")
-    # SQLite fallback
-    conn = _get_sqlite_connection()
-    q = query
-    # Convert $1, $2 to ? if query was written for PG
-    import re
-    q = re.sub(r'\$\d+', '?', q)
-    cursor = conn.cursor()
-    cursor.execute(q, args)
-    conn.commit()
-    return cursor.rowcount
+    pool = await init_db_pool()
+    pg_query = _prepare_pg_query(query)
+    async with pool.acquire() as conn:
+        return await conn.execute(pg_query, *args)
 
 
 async def fetchrow(query: str, *args) -> Optional[Dict[str, Any]]:
-    global _pg_pool, _use_sqlite_fallback
-    if not _use_sqlite_fallback:
-        pool = await init_db_pool()
-        if pool:
-            try:
-                pg_query = query
-                if "?" in pg_query:
-                    parts = pg_query.split("?")
-                    new_q = []
-                    for i, p in enumerate(parts[:-1]):
-                        new_q.append(f"{p}${i+1}")
-                    new_q.append(parts[-1])
-                    pg_query = "".join(new_q)
-                async with pool.acquire() as conn:
-                    row = await conn.fetchrow(pg_query, *args)
-                    return dict(row) if row else None
-            except Exception as e:
-                logger.error(f"PG Fetchrow error: {e}")
-    # SQLite fallback
-    conn = _get_sqlite_connection()
-    import re
-    q = re.sub(r'\$\d+', '?', query)
-    cursor = conn.cursor()
-    cursor.execute(q, args)
-    row = cursor.fetchone()
-    return dict(row) if row else None
+    pool = await init_db_pool()
+    pg_query = _prepare_pg_query(query)
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(pg_query, *args)
+        return dict(row) if row else None
 
 
 async def fetch(query: str, *args) -> List[Dict[str, Any]]:
-    global _pg_pool, _use_sqlite_fallback
-    if not _use_sqlite_fallback:
-        pool = await init_db_pool()
-        if pool:
-            try:
-                pg_query = query
-                if "?" in pg_query:
-                    parts = pg_query.split("?")
-                    new_q = []
-                    for i, p in enumerate(parts[:-1]):
-                        new_q.append(f"{p}${i+1}")
-                    new_q.append(parts[-1])
-                    pg_query = "".join(new_q)
-                async with pool.acquire() as conn:
-                    rows = await conn.fetch(pg_query, *args)
-                    return [dict(r) for r in rows]
-            except Exception as e:
-                logger.error(f"PG Fetch error: {e}")
-    # SQLite fallback
-    conn = _get_sqlite_connection()
-    import re
-    q = re.sub(r'\$\d+', '?', query)
-    cursor = conn.cursor()
-    cursor.execute(q, args)
-    rows = cursor.fetchall()
-    return [dict(r) for r in rows]
+    pool = await init_db_pool()
+    pg_query = _prepare_pg_query(query)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(pg_query, *args)
+        return [dict(r) for r in rows]
 
 
 async def fetchval(query: str, *args):

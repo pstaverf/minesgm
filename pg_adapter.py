@@ -12,13 +12,11 @@ from db_config import DATABASE_URL
 from db import PG_SCHEMA_SQL
 
 
-def _convert_sqlite_query_to_pg(query: str) -> str:
+def _convert_query_params_to_pg(query: str) -> str:
     """
-    Safely converts SQLite syntax to PostgreSQL:
-    1. Replaces '?' with '%s' ONLY outside of quoted string literals.
-    2. Translates 'ALTER TABLE ... ADD COLUMN ...' to include 'IF NOT EXISTS'.
-    3. Translates 'AUTOINCREMENT' to 'BIGSERIAL' / 'SERIAL'.
-    4. Translates 'INSERT OR IGNORE INTO' to 'INSERT INTO ... ON CONFLICT DO NOTHING'.
+    Safely converts query syntax for psycopg2:
+    1. Replaces '?' with '%s' outside of single/double quotes.
+    2. Translates 'INSERT OR IGNORE INTO' to 'INSERT INTO ... ON CONFLICT DO NOTHING'.
     """
     q = query.strip()
 
@@ -30,7 +28,6 @@ def _convert_sqlite_query_to_pg(query: str) -> str:
     while i < len(q):
         char = q[i]
         if char == "'" and not in_double_quote:
-            # Check for escaped single quote
             if i + 1 < len(q) and q[i+1] == "'":
                 result.append("''")
                 i += 2
@@ -47,26 +44,20 @@ def _convert_sqlite_query_to_pg(query: str) -> str:
         i += 1
     q = "".join(result)
 
-    # 2. ALTER TABLE ... ADD COLUMN -> ADD COLUMN IF NOT EXISTS
-    if re.search(r'\bALTER\s+TABLE\b', q, re.IGNORECASE) and re.search(r'\bADD\s+COLUMN\b', q, re.IGNORECASE):
-        if not re.search(r'\bIF\s+NOT\s+EXISTS\b', q, re.IGNORECASE):
-            q = re.sub(r'(\bADD\s+COLUMN\s+)', r'\1IF NOT EXISTS ', q, flags=re.IGNORECASE)
-
-    # 3. AUTOINCREMENT -> SERIAL in CREATE TABLE (if any new tables are created)
-    if "AUTOINCREMENT" in q.upper():
-        q = re.sub(r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT', 'BIGSERIAL PRIMARY KEY', q, flags=re.IGNORECASE)
-        q = re.sub(r'AUTOINCREMENT', '', q, flags=re.IGNORECASE)
-
-    # 4. INSERT OR IGNORE -> INSERT ... ON CONFLICT DO NOTHING
+    # 2. INSERT OR IGNORE -> INSERT ... ON CONFLICT DO NOTHING
     if re.search(r'\bINSERT\s+OR\s+IGNORE\s+INTO\b', q, re.IGNORECASE):
         q = re.sub(r'\bINSERT\s+OR\s+IGNORE\s+INTO\b', 'INSERT INTO', q, flags=re.IGNORECASE)
         if "ON CONFLICT" not in q.upper():
             q = q + " ON CONFLICT DO NOTHING"
 
+    # 3. Scalar MAX(COALESCE(...), ...) -> GREATEST(COALESCE(...), ...) for PostgreSQL
+    if re.search(r'\bMAX\s*\(\s*COALESCE', q, re.IGNORECASE):
+        q = re.sub(r'\bMAX\s*\((\s*COALESCE)', r'GREATEST(\1', q, flags=re.IGNORECASE)
+
     return q
 
 
-class SQLiteCompatibleRow:
+class PGRow:
     """Dual access row wrapper: supports row[0], row['column'], dict(row), iteration, etc."""
     __slots__ = ('_data', '_mapping', '_col_names')
 
@@ -97,7 +88,7 @@ class SQLiteCompatibleRow:
         return key in self._data
 
     def __repr__(self):
-        return f"<Row {self._mapping}>"
+        return f"<PGRow {self._mapping}>"
 
     def keys(self):
         return self._col_names
@@ -112,86 +103,117 @@ class SQLiteCompatibleRow:
         return self._mapping.get(str(key).lower(), default)
 
 
+# Alias for backward compatibility if referenced
+SQLiteCompatibleRow = PGRow
+
+
 class PGAdapterCursor:
     def __init__(self, adapter_conn):
         self._adapter_conn = adapter_conn
+        self._raw_cursor = None
         self.description = None
         self.rowcount = -1
         self.lastrowid = None
 
+    def _ensure_cursor(self):
+        if self._raw_cursor is None or self._raw_cursor.closed:
+            self._raw_cursor = self._adapter_conn._get_raw_cursor()
+        return self._raw_cursor
+
     def execute(self, query: str, params: Union[Tuple, List, dict] = None):
-        converted_query = _convert_sqlite_query_to_pg(query)
+        converted_query = _convert_query_params_to_pg(query)
         with self._adapter_conn._lock:
-            cur = self._adapter_conn._get_raw_cursor()
-            try:
-                if params is not None:
-                    cur.execute(converted_query, params)
-                else:
-                    cur.execute(converted_query)
-                self.description = cur.description
-                self.rowcount = cur.rowcount
-                return self
-            except Exception as e:
-                # If error occurred, attempt rollback to keep connection healthy
+            for attempt in range(2):
+                cur = self._ensure_cursor()
                 try:
-                    self._adapter_conn._conn.rollback()
-                except Exception:
-                    pass
-                logger.error(f"PostgreSQL Query Error: {e} | Query: {converted_query}")
-                raise
+                    if params is not None:
+                        cur.execute(converted_query, params)
+                    else:
+                        cur.execute(converted_query)
+                    self.description = cur.description
+                    self.rowcount = cur.rowcount
+                    return self
+                except Exception as e:
+                    try:
+                        self._adapter_conn._conn.rollback()
+                    except Exception:
+                        pass
+                    # If connection dropped, reconnect and retry once
+                    if attempt == 0:
+                        try:
+                            logger.warning(f"Connection lost ({e}), reconnecting to PostgreSQL...")
+                            self._adapter_conn._connect()
+                            self._raw_cursor = self._adapter_conn._get_raw_cursor()
+                            continue
+                        except Exception:
+                            pass
+                    logger.error(f"PostgreSQL Query Error: {e} | Query: {converted_query}")
+                    raise
 
     def executemany(self, query: str, seq_of_params):
-        converted_query = _convert_sqlite_query_to_pg(query)
+        converted_query = _convert_query_params_to_pg(query)
         with self._adapter_conn._lock:
-            cur = self._adapter_conn._get_raw_cursor()
-            try:
-                cur.executemany(converted_query, seq_of_params)
-                self.description = cur.description
-                self.rowcount = cur.rowcount
-                return self
-            except Exception as e:
+            for attempt in range(2):
+                cur = self._ensure_cursor()
                 try:
-                    self._adapter_conn._conn.rollback()
-                except Exception:
-                    pass
-                logger.error(f"PostgreSQL executemany Error: {e} | Query: {converted_query}")
-                raise
+                    cur.executemany(converted_query, seq_of_params)
+                    self.description = cur.description
+                    self.rowcount = cur.rowcount
+                    return self
+                except Exception as e:
+                    try:
+                        self._adapter_conn._conn.rollback()
+                    except Exception:
+                        pass
+                    if attempt == 0:
+                        try:
+                            logger.warning(f"Connection lost ({e}), reconnecting to PostgreSQL...")
+                            self._adapter_conn._connect()
+                            self._raw_cursor = self._adapter_conn._get_raw_cursor()
+                            continue
+                        except Exception:
+                            pass
+                    logger.error(f"PostgreSQL executemany Error: {e} | Query: {converted_query}")
+                    raise
 
-    def fetchone(self) -> Optional[SQLiteCompatibleRow]:
+    def fetchone(self) -> Optional[PGRow]:
         with self._adapter_conn._lock:
-            cur = self._adapter_conn._get_raw_cursor()
+            cur = self._ensure_cursor()
             try:
                 row = cur.fetchone()
                 if row is None:
                     return None
                 if cur.description:
                     cols = [desc[0] for desc in cur.description]
-                    return SQLiteCompatibleRow(row, cols)
+                    return PGRow(row, cols)
                 return row
-            except Exception as e:
-                # Some queries (like UPDATE/INSERT without RETURNING) have no rows to fetch
+            except Exception:
                 return None
 
-    def fetchall(self) -> List[SQLiteCompatibleRow]:
+    def fetchall(self) -> List[PGRow]:
         with self._adapter_conn._lock:
-            cur = self._adapter_conn._get_raw_cursor()
+            cur = self._ensure_cursor()
             try:
                 rows = cur.fetchall()
                 if not rows:
                     return []
                 if cur.description:
                     cols = [desc[0] for desc in cur.description]
-                    return [SQLiteCompatibleRow(r, cols) for r in rows]
+                    return [PGRow(r, cols) for r in rows]
                 return rows
-            except Exception as e:
+            except Exception:
                 return []
 
     def close(self):
-        pass
+        try:
+            if self._raw_cursor and not self._raw_cursor.closed:
+                self._raw_cursor.close()
+        except Exception:
+            pass
 
 
 class PGAdapterConnection:
-    """Thread-safe resilient connection to PostgreSQL matching sqlite3.Connection API."""
+    """Thread-safe resilient connection to PostgreSQL."""
     def __init__(self, dsn: str = DATABASE_URL):
         self.dsn = dsn
         self._conn = None
@@ -205,7 +227,7 @@ class PGAdapterConnection:
             try:
                 import psycopg2
                 self._conn = psycopg2.connect(self.dsn)
-                self._conn.autocommit = True  # Autocommit avoids stalled transaction locks
+                self._conn.autocommit = True
                 logger.info("Connected to PostgreSQL successfully! 🚀")
             except ImportError:
                 logger.error("psycopg2 is not installed! Run `pip install psycopg2-binary`")
@@ -215,7 +237,6 @@ class PGAdapterConnection:
                 raise
 
     def _get_raw_cursor(self):
-        # Auto-reconnect if connection was dropped
         try:
             if self._conn is None or self._conn.closed:
                 self._connect()
@@ -229,20 +250,19 @@ class PGAdapterConnection:
             try:
                 cur = self._conn.cursor()
                 cur.execute(PG_SCHEMA_SQL)
-                logger.info("PostgreSQL database tables & performance indexes verified successfully! ✅")
+                logger.info("PostgreSQL database tables & indexes verified successfully! ✅")
             except Exception as e:
-                logger.warning(f"Schema verification note: {e}")
+                logger.warning(f"Schema initialization note: {e}")
 
     def cursor(self):
         return PGAdapterCursor(self)
 
     def execute(self, query: str, params: Any = None):
-        """Shortcut matching sqlite3 conn.execute()."""
         cur = self.cursor()
         return cur.execute(query, params)
 
     def commit(self):
-        # With autocommit=True, changes are saved immediately
+        # With autocommit=True, transactions commit immediately
         pass
 
     def rollback(self):
@@ -254,7 +274,7 @@ class PGAdapterConnection:
                     pass
 
     def create_function(self, name, num_args, func):
-        # Built-in in PostgreSQL (e.g. lower, upper, etc.)
+        # PostgreSQL has built-in lower/upper functions
         pass
 
     def close(self):
@@ -274,18 +294,11 @@ _global_adapter_conn = None
 _global_lock = threading.Lock()
 
 
-def get_db_connection(dsn: str = None) -> Union[PGAdapterConnection, Any]:
-    """Returns singleton PostgreSQL connection matching sqlite3 API."""
+def get_db_connection(dsn: str = None) -> PGAdapterConnection:
+    """Returns singleton PostgreSQL connection."""
     global _global_adapter_conn
     with _global_lock:
         if _global_adapter_conn is None:
             target_dsn = dsn or DATABASE_URL
-            try:
-                _global_adapter_conn = PGAdapterConnection(target_dsn)
-            except Exception as e:
-                logger.warning(f"PostgreSQL unavailable ({e}), using local SQLite fallback.")
-                import sqlite3
-                conn = sqlite3.connect("game.db", check_same_thread=False)
-                conn.create_function("lower", 1, lambda s: s.lower() if s is not None else None)
-                return conn
+            _global_adapter_conn = PGAdapterConnection(target_dsn)
         return _global_adapter_conn
