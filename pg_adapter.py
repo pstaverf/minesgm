@@ -17,6 +17,7 @@ def _convert_query_params_to_pg(query: str) -> str:
     Safely converts query syntax for psycopg2:
     1. Replaces '?' with '%s' outside of single/double quotes.
     2. Translates 'INSERT OR IGNORE INTO' to 'INSERT INTO ... ON CONFLICT DO NOTHING'.
+    3. Translates scalar 'MAX(COALESCE(...))' to 'GREATEST(COALESCE(...))'.
     """
     q = query.strip()
 
@@ -57,13 +58,21 @@ def _convert_query_params_to_pg(query: str) -> str:
     return q
 
 
+class _CaseInsensitiveColList(list):
+    def __contains__(self, item):
+        if isinstance(item, str):
+            item_lower = item.lower()
+            return any(isinstance(x, str) and x.lower() == item_lower for x in self)
+        return super().__contains__(item)
+
+
 class PGRow:
-    """Dual access row wrapper: supports row[0], row['column'], dict(row), iteration, etc."""
+    """Dual access row wrapper: supports row[0], row['column'], row[1:3], dict(row.items()), iteration, etc."""
     __slots__ = ('_data', '_mapping', '_col_names')
 
     def __init__(self, data_tuple: tuple, col_names: list):
         self._data = data_tuple
-        self._col_names = col_names
+        self._col_names = _CaseInsensitiveColList(col_names)
         self._mapping = {name.lower(): val for name, val in zip(col_names, data_tuple)}
 
     def __getitem__(self, item):
@@ -74,6 +83,8 @@ class PGRow:
             if key in self._mapping:
                 return self._mapping[key]
             raise KeyError(f"Column '{item}' not found in row. Available: {self._col_names}")
+        elif isinstance(item, slice):
+            return self._data[item]
         raise TypeError(f"Invalid row key type: {type(item)}")
 
     def __iter__(self):
@@ -231,7 +242,7 @@ class PGAdapterConnection:
                 import psycopg2
                 self._conn = psycopg2.connect(self.dsn)
                 self._conn.autocommit = True
-                logger.info("Connected to PostgreSQL successfully! 🚀")
+                logger.info("Connected to PostgreSQL successfully!")
             except ImportError:
                 logger.error("psycopg2 is not installed! Run `pip install psycopg2-binary`")
                 raise
@@ -258,7 +269,7 @@ class PGAdapterConnection:
             try:
                 cur = self._conn.cursor()
                 cur.execute(PG_SCHEMA_SQL)
-                logger.info("PostgreSQL database tables & indexes verified successfully! ✅")
+                logger.info("PostgreSQL database tables & indexes verified successfully!")
                 self._sync_sequences()
                 _schema_initialized = True
             except Exception as e:
@@ -287,7 +298,7 @@ class PGAdapterConnection:
                         END LOOP;
                     END $do$;
                 """)
-                logger.info("PostgreSQL sequences synchronized successfully! 🔢")
+                logger.info("PostgreSQL sequences synchronized successfully!")
             except Exception as e:
                 logger.warning(f"Sequence synchronization note: {e}")
 

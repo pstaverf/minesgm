@@ -2537,6 +2537,12 @@ async def cmd_sn(message: types.Message):
             cursor.execute("ALTER SEQUENCE IF EXISTS games_history_id_seq RESTART WITH 1")
             cursor.execute("ALTER SEQUENCE IF EXISTS transfers_history_id_seq RESTART WITH 1")
             cursor.execute("ALTER SEQUENCE IF EXISTS mp_transfers_history_id_seq RESTART WITH 1")
+            cursor.execute("ALTER SEQUENCE IF EXISTS p2p_deals_history_id_seq RESTART WITH 1")
+            cursor.execute("ALTER SEQUENCE IF EXISTS p2p_deal_ratings_id_seq RESTART WITH 1")
+            cursor.execute("ALTER SEQUENCE IF EXISTS p2p_bot_stats_id_seq RESTART WITH 1")
+            cursor.execute("ALTER SEQUENCE IF EXISTS time_deposits_id_seq RESTART WITH 1")
+            cursor.execute("ALTER SEQUENCE IF EXISTS savings_history_id_seq RESTART WITH 1")
+            cursor.execute("ALTER SEQUENCE IF EXISTS arena_history_id_seq RESTART WITH 1")
         except Exception:
             pass
         conn.commit()
@@ -10959,20 +10965,6 @@ def format_deal_date(dt_str):
 
 def get_p2p_settings():
     try:
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS p2p_settings (
-                id INTEGER PRIMARY KEY,
-                official_sell_enabled INTEGER DEFAULT 1,
-                official_buy_enabled INTEGER DEFAULT 1,
-                official_sell_rate INTEGER DEFAULT 10000,
-                official_buy_rate INTEGER DEFAULT 10000,
-                rate_min INTEGER DEFAULT 7000,
-                rate_max INTEGER DEFAULT 29000,
-                interval_minutes INTEGER DEFAULT 150,
-                last_update TEXT DEFAULT NULL
-            )
-        ''')
-        conn.commit()
         cursor.execute("SELECT id, official_sell_enabled, official_buy_enabled, official_sell_rate, official_buy_rate, rate_min, rate_max, interval_minutes, last_update FROM p2p_settings WHERE id = 1")
         row = cursor.fetchone()
         if not row:

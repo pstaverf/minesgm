@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import json
 import asyncio
 import logging
@@ -267,15 +268,49 @@ CREATE INDEX IF NOT EXISTS idx_arena_history_winner ON arena_history(winner_id);
 
 
 def _prepare_pg_query(query: str) -> str:
-    """Formats placeholders from ? to $1, $2, ... for asyncpg."""
-    if "?" in query:
-        parts = query.split("?")
-        new_q = []
-        for i, p in enumerate(parts[:-1]):
-            new_q.append(f"{p}${i+1}")
-        new_q.append(parts[-1])
-        return "".join(new_q)
-    return query
+    """
+    Quote-aware placeholder replacement for asyncpg ($1, $2, ...) and syntax normalization:
+    1. Replaces '?' outside single/double quotes with $1, $2, ...
+    2. Translates 'INSERT OR IGNORE INTO' to 'INSERT INTO ... ON CONFLICT DO NOTHING'.
+    3. Translates scalar 'MAX(COALESCE(...))' to 'GREATEST(COALESCE(...))'.
+    """
+    q = query.strip()
+
+    # 1. INSERT OR IGNORE -> INSERT ... ON CONFLICT DO NOTHING
+    if re.search(r'\bINSERT\s+OR\s+IGNORE\s+INTO\b', q, re.IGNORECASE):
+        q = re.sub(r'\bINSERT\s+OR\s+IGNORE\s+INTO\b', 'INSERT INTO', q, flags=re.IGNORECASE)
+        if "ON CONFLICT" not in q.upper():
+            q = q + " ON CONFLICT DO NOTHING"
+
+    # 2. Scalar MAX(COALESCE(...), ...) -> GREATEST(COALESCE(...), ...)
+    if re.search(r'\bMAX\s*\(\s*COALESCE', q, re.IGNORECASE):
+        q = re.sub(r'\bMAX\s*\((\s*COALESCE)', r'GREATEST(\1', q, flags=re.IGNORECASE)
+
+    # 3. Parameter placeholder replacement (? -> $1, $2, ...)
+    result = []
+    in_single_quote = False
+    in_double_quote = False
+    param_idx = 1
+    i = 0
+    while i < len(q):
+        char = q[i]
+        if char == "'" and not in_double_quote:
+            if i + 1 < len(q) and q[i+1] == "'":
+                result.append("''")
+                i += 2
+                continue
+            in_single_quote = not in_single_quote
+            result.append(char)
+        elif char == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+            result.append(char)
+        elif char == '?' and not in_single_quote and not in_double_quote:
+            result.append(f"${param_idx}")
+            param_idx += 1
+        else:
+            result.append(char)
+        i += 1
+    return "".join(result)
 
 
 async def init_db_pool():
@@ -316,7 +351,7 @@ async def init_db_pool():
                     """)
                 except Exception as se:
                     logger.warning(f"Sequence sync note: {se}")
-            logger.info("Connected to PostgreSQL pool and initialized schema successfully! 🚀")
+            logger.info("Connected to PostgreSQL pool and initialized schema successfully!")
             return _pg_pool
         except Exception as e:
             last_err = e
