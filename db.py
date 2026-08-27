@@ -282,22 +282,48 @@ async def init_db_pool():
     global _pg_pool
     if _pg_pool is not None:
         return _pg_pool
-    try:
-        import asyncpg
-        _pg_pool = await asyncpg.create_pool(
-            dsn=DATABASE_URL,
-            min_size=1,
-            max_size=20,
-            command_timeout=30.0,
-            timeout=30.0
-        )
-        async with _pg_pool.acquire() as conn:
-            await conn.execute(PG_SCHEMA_SQL)
-        logger.info("Connected to PostgreSQL pool and initialized schema successfully! 🚀")
-        return _pg_pool
-    except Exception as e:
-        logger.error(f"PostgreSQL pool initialization failed: {e}")
-        raise
+    import asyncpg
+    last_err = None
+    for attempt in range(3):
+        try:
+            _pg_pool = await asyncpg.create_pool(
+                dsn=DATABASE_URL,
+                min_size=1,
+                max_size=20,
+                command_timeout=45.0,
+                timeout=45.0
+            )
+            async with _pg_pool.acquire() as conn:
+                await conn.execute(PG_SCHEMA_SQL)
+                try:
+                    await conn.execute("""
+                        DO $do$
+                        DECLARE
+                            r RECORD;
+                            seq_name TEXT;
+                        BEGIN
+                            FOR r IN (
+                                SELECT table_name, column_name 
+                                FROM information_schema.columns 
+                                WHERE column_default LIKE 'nextval(%' AND table_schema = 'public'
+                            ) LOOP
+                                seq_name := pg_get_serial_sequence(r.table_name, r.column_name);
+                                IF seq_name IS NOT NULL THEN
+                                    EXECUTE format('SELECT setval(%L, COALESCE((SELECT MAX(%I) FROM %I), 0) + 1, false)', seq_name, r.column_name, r.table_name);
+                                END IF;
+                            END LOOP;
+                        END $do$;
+                    """)
+                except Exception as se:
+                    logger.warning(f"Sequence sync note: {se}")
+            logger.info("Connected to PostgreSQL pool and initialized schema successfully! 🚀")
+            return _pg_pool
+        except Exception as e:
+            last_err = e
+            logger.warning(f"PostgreSQL pool attempt {attempt + 1} failed ({e}), retrying...")
+            await asyncio.sleep(1.0)
+    logger.error(f"PostgreSQL pool initialization failed: {last_err}")
+    raise last_err
 
 
 async def execute(query: str, *args):

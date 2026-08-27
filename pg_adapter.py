@@ -212,6 +212,9 @@ class PGAdapterCursor:
             pass
 
 
+_schema_initialized = False
+
+
 class PGAdapterConnection:
     """Thread-safe resilient connection to PostgreSQL."""
     def __init__(self, dsn: str = DATABASE_URL):
@@ -246,13 +249,47 @@ class PGAdapterConnection:
             return self._conn.cursor()
 
     def _init_schema(self):
+        global _schema_initialized
+        if _schema_initialized:
+            return
         with self._lock:
+            if _schema_initialized:
+                return
             try:
                 cur = self._conn.cursor()
                 cur.execute(PG_SCHEMA_SQL)
                 logger.info("PostgreSQL database tables & indexes verified successfully! ✅")
+                self._sync_sequences()
+                _schema_initialized = True
             except Exception as e:
                 logger.warning(f"Schema initialization note: {e}")
+
+    def _sync_sequences(self):
+        """Synchronizes all serial sequences with current MAX(id) in each table."""
+        with self._lock:
+            try:
+                cur = self._conn.cursor()
+                cur.execute("""
+                    DO $do$
+                    DECLARE
+                        r RECORD;
+                        seq_name TEXT;
+                    BEGIN
+                        FOR r IN (
+                            SELECT table_name, column_name 
+                            FROM information_schema.columns 
+                            WHERE column_default LIKE 'nextval(%' AND table_schema = 'public'
+                        ) LOOP
+                            seq_name := pg_get_serial_sequence(r.table_name, r.column_name);
+                            IF seq_name IS NOT NULL THEN
+                                EXECUTE format('SELECT setval(%L, COALESCE((SELECT MAX(%I) FROM %I), 0) + 1, false)', seq_name, r.column_name, r.table_name);
+                            END IF;
+                        END LOOP;
+                    END $do$;
+                """)
+                logger.info("PostgreSQL sequences synchronized successfully! 🔢")
+            except Exception as e:
+                logger.warning(f"Sequence synchronization note: {e}")
 
     def cursor(self):
         return PGAdapterCursor(self)

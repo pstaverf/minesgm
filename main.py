@@ -67,7 +67,8 @@ mp_pending_transfers = {}
 def init_caches():
     try:
         cursor.execute("SELECT user_id, reason, until, is_permanent FROM bans")
-        for uid, reason, until_str, is_perm in cursor.fetchall():
+        for row in cursor.fetchall():
+            uid, reason, until_str, is_perm = row[0], row[1], row[2], row[3]
             if is_perm:
                 _banned_users_cache[uid] = {"reason": reason, "until_str": "Навсегда", "until_dt": None, "is_perm": True}
             elif until_str:
@@ -78,12 +79,12 @@ def init_caches():
                     pass
 
         cursor.execute("SELECT user_id FROM top_bans")
-        for (uid,) in cursor.fetchall():
-            _top_banned_users.add(uid)
+        for row in cursor.fetchall():
+            _top_banned_users.add(row[0])
 
         cursor.execute("SELECT user_id FROM transfer_bans")
-        for (uid,) in cursor.fetchall():
-            _transfer_banned_users.add(uid)
+        for row in cursor.fetchall():
+            _transfer_banned_users.add(row[0])
     except Exception:
         pass
 
@@ -168,7 +169,7 @@ def get_user(user_id):
                 "first_name": result[13] if len(result) > 13 and result[13] else None
             }
         reg_time = datetime.now().strftime("%d.%m.%Y %H:%M")
-        cursor.execute('INSERT INTO users (user_id, balance, games, lost, bonus_time, username, registered_at, mp_balance, mp_daily_transferred, mp_daily_date, ref_earned, ref_count, referred_by, max_balance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (user_id, 0, 0, 0, None, None, reg_time, 0, 0, None, 0, 0, None, 0))
+        cursor.execute('INSERT INTO users (user_id, balance, games, lost, bonus_time, username, registered_at, mp_balance, mp_daily_transferred, mp_daily_date, ref_earned, ref_count, referred_by, max_balance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id) DO NOTHING', (user_id, 0, 0, 0, None, None, reg_time, 0, 0, None, 0, 0, None, 0))
         conn.commit()
         return {"balance": 0, "games": 0, "lost": 0, "bonus_time": None, "username": None, "registered_at": reg_time, "mp_balance": 0, "mp_daily_transferred": 0, "mp_daily_date": None, "ref_earned": 0, "ref_count": 0, "referred_by": None, "max_balance": 0, "first_name": None}
     except Exception:
@@ -538,7 +539,7 @@ def get_bank_settings(user_id):
         row = cursor.fetchone()
         if row is not None:
             return {"notifications_enabled": bool(row[0])}
-        cursor.execute("INSERT INTO bank_settings (user_id, notifications_enabled) VALUES (?, 1)", (user_id,))
+        cursor.execute("INSERT INTO bank_settings (user_id, notifications_enabled) VALUES (?, 1) ON CONFLICT (user_id) DO NOTHING", (user_id,))
         conn.commit()
         return {"notifications_enabled": True}
     except Exception:
@@ -715,7 +716,7 @@ def get_savings_account(user_id):
                 "total_earned": row[2],
                 "last_accrual": row[3]
             }
-        cursor.execute("INSERT INTO savings_accounts (user_id, balance, accumulated_interest, total_earned, last_accrual) VALUES (?, 0, 0.0, 0, ?)", (user_id, datetime.now().isoformat()))
+        cursor.execute("INSERT INTO savings_accounts (user_id, balance, accumulated_interest, total_earned, last_accrual) VALUES (?, 0, 0.0, 0, ?) ON CONFLICT (user_id) DO NOTHING", (user_id, datetime.now().isoformat()))
         conn.commit()
         return {"balance": 0, "accumulated_interest": 0.0, "total_earned": 0, "last_accrual": datetime.now().isoformat()}
     except Exception:
@@ -992,7 +993,7 @@ def add_chat_member(user_id, chat_id):
         return True
     _known_chat_members.add(key)
     try:
-        cursor.execute('INSERT INTO chat_members (user_id, chat_id) VALUES (?, ?) ON CONFLICT DO NOTHING', (user_id, chat_id))
+        cursor.execute('INSERT INTO chat_members (user_id, chat_id) VALUES (?, ?) ON CONFLICT (user_id, chat_id) DO NOTHING', (user_id, chat_id))
         conn.commit()
         return True
     except Exception:
@@ -4688,7 +4689,7 @@ async def cmd_promo(message: types.Message):
         new_remaining = remaining - 1
         now_str = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
 
-        cursor.execute("INSERT INTO promo_activations (code, user_id, activated_at) VALUES (?, ?, ?)", (real_code, user_id, now_str))
+        cursor.execute("INSERT INTO promo_activations (code, user_id, activated_at) VALUES (?, ?, ?) ON CONFLICT (code, user_id) DO NOTHING", (real_code, user_id, now_str))
 
         if new_remaining <= 0:
             cursor.execute("DELETE FROM promo_codes WHERE code = ?", (real_code,))
@@ -10976,7 +10977,7 @@ def get_p2p_settings():
         row = cursor.fetchone()
         if not row:
             now_iso = datetime.now().isoformat()
-            cursor.execute("INSERT INTO p2p_settings (id, official_sell_enabled, official_buy_enabled, official_sell_rate, official_buy_rate, rate_min, rate_max, interval_minutes, last_update) VALUES (1, 1, 1, 10000, 10000, 7000, 29000, 150, ?)", (now_iso,))
+            cursor.execute("INSERT INTO p2p_settings (id, official_sell_enabled, official_buy_enabled, official_sell_rate, official_buy_rate, rate_min, rate_max, interval_minutes, last_update) VALUES (1, 1, 1, 10000, 10000, 7000, 29000, 150, ?) ON CONFLICT (id) DO NOTHING", (now_iso,))
             conn.commit()
             return {
                 "official_sell_enabled": 1,
@@ -11042,25 +11043,41 @@ def update_p2p_rate_fluctuation(force=False):
 
 
 def get_p2p_account(user_id):
-    cursor.execute("SELECT user_id, mcoin_balance, mp_balance, rating, deals_count, last_deposit_date, sell_order_active, sell_price, buy_order_active, buy_price FROM p2p_accounts WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    if not row:
-        cursor.execute("INSERT INTO p2p_accounts (user_id) VALUES (?) ON CONFLICT (user_id) DO NOTHING", (user_id,))
-        conn.commit()
+    try:
         cursor.execute("SELECT user_id, mcoin_balance, mp_balance, rating, deals_count, last_deposit_date, sell_order_active, sell_price, buy_order_active, buy_price FROM p2p_accounts WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
+        if not row:
+            cursor.execute("INSERT INTO p2p_accounts (user_id) VALUES (?) ON CONFLICT (user_id) DO NOTHING", (user_id,))
+            conn.commit()
+            cursor.execute("SELECT user_id, mcoin_balance, mp_balance, rating, deals_count, last_deposit_date, sell_order_active, sell_price, buy_order_active, buy_price FROM p2p_accounts WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
 
+        if row:
+            return {
+                "user_id": row[0],
+                "mcoin_balance": row[1] or 0,
+                "mp_balance": row[2] or 0,
+                "rating": row[3] if row[3] is not None else 100,
+                "deals_count": row[4] or 0,
+                "last_deposit_date": row[5],
+                "sell_order_active": row[6] or 0,
+                "sell_price": row[7] or 0,
+                "buy_order_active": row[8] or 0,
+                "buy_price": row[9] or 0
+            }
+    except Exception:
+        pass
     return {
-        "user_id": row[0],
-        "mcoin_balance": row[1] or 0,
-        "mp_balance": row[2] or 0,
-        "rating": row[3] or 0,
-        "deals_count": row[4] or 0,
-        "last_deposit_date": row[5],
-        "sell_order_active": row[6] or 0,
-        "sell_price": row[7] or 0,
-        "buy_order_active": row[8] or 0,
-        "buy_price": row[9] or 0
+        "user_id": user_id,
+        "mcoin_balance": 0,
+        "mp_balance": 0,
+        "rating": 100,
+        "deals_count": 0,
+        "last_deposit_date": None,
+        "sell_order_active": 0,
+        "sell_price": 0,
+        "buy_order_active": 0,
+        "buy_price": 0
     }
 
 
