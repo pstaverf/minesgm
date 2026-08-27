@@ -11223,8 +11223,10 @@ def execute_p2p_buy_deal(buyer_id, seller_id, amount_mp):
         cursor.execute('''
             INSERT INTO p2p_deals_history (buyer_id, seller_id, amount_mp, price_per_mp, total_mcoin, commission, created_at)
             VALUES (?, ?, ?, ?, ?, 0, ?)
+            RETURNING id
         ''', (buyer_id, seller_id, amount_mp, seller_p2p["sell_price"], total_cost, now_str))
-        deal_id = cursor.lastrowid
+        res_row = cursor.fetchone()
+        deal_id = res_row[0] if res_row else 0
         conn.commit()
         return True, {
             "deal_id": deal_id,
@@ -11258,9 +11260,12 @@ def execute_p2p_buy_from_bot(user_id, amount_mp):
             return False, "Недостаточно mCoin на основном балансе!"
 
         cursor.execute("INSERT INTO p2p_bot_stats (user_id, amount_mp, amount_mcoin, created_at) VALUES (?, ?, ?, ?)", (user_id, amount_mp, total_mcoin, now_str))
-        cursor.execute("INSERT INTO p2p_deals_history (buyer_id, seller_id, amount_mp, price_per_mp, total_mcoin, commission, created_at) VALUES (?, 0, ?, ?, ?, 0, ?)", (user_id, amount_mp, rate, total_mcoin, now_str))
+        cursor.execute("INSERT INTO p2p_deals_history (buyer_id, seller_id, amount_mp, price_per_mp, total_mcoin, commission, created_at) VALUES (?, 0, ?, ?, ?, 0, ?) RETURNING id", (user_id, amount_mp, rate, total_mcoin, now_str))
+        res_row = cursor.fetchone()
+        deal_id = res_row[0] if res_row else 0
         conn.commit()
         return True, {
+            "deal_id": deal_id,
             "amount_mp": amount_mp,
             "total_mcoin": total_mcoin,
             "rate": rate
@@ -11290,9 +11295,12 @@ def execute_p2p_sell_to_bot(user_id, amount_mp):
             return False, "Недостаточно MP на балансе!"
 
         cursor.execute("INSERT INTO p2p_bot_stats (user_id, amount_mp, amount_mcoin, created_at) VALUES (?, ?, ?, ?)", (user_id, amount_mp, total_mcoin, now_str))
-        cursor.execute("INSERT INTO p2p_deals_history (buyer_id, seller_id, amount_mp, price_per_mp, total_mcoin, commission, created_at) VALUES (0, ?, ?, ?, ?, 0, ?)", (user_id, amount_mp, rate, total_mcoin, now_str))
+        cursor.execute("INSERT INTO p2p_deals_history (buyer_id, seller_id, amount_mp, price_per_mp, total_mcoin, commission, created_at) VALUES (0, ?, ?, ?, ?, 0, ?) RETURNING id", (user_id, amount_mp, rate, total_mcoin, now_str))
+        res_row = cursor.fetchone()
+        deal_id = res_row[0] if res_row else 0
         conn.commit()
         return True, {
+            "deal_id": deal_id,
             "amount_mp": amount_mp,
             "total_mcoin": total_mcoin,
             "rate": rate
@@ -11333,8 +11341,10 @@ def execute_p2p_sell_to_buyer(seller_id, buyer_id, amount_mp):
         cursor.execute('''
             INSERT INTO p2p_deals_history (buyer_id, seller_id, amount_mp, price_per_mp, total_mcoin, commission, created_at)
             VALUES (?, ?, ?, ?, ?, 0, ?)
+            RETURNING id
         ''', (buyer_id, seller_id, amount_mp, buyer_p2p["buy_price"], total_mcoin, now_str))
-        deal_id = cursor.lastrowid
+        res_row = cursor.fetchone()
+        deal_id = res_row[0] if res_row else 0
         conn.commit()
         return True, {
             "deal_id": deal_id,
@@ -11948,7 +11958,15 @@ async def cb_p2p_confirm_buy_bot(callback: types.CallbackQuery):
         f'<tg-emoji emoji-id="5307594157739515229">💎</tg-emoji> MPOINT зачислены на твой основной баланс.'
     )
     kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="В меню обмена", callback_data="p2p_main", style="primary")]]
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="1", callback_data=f"p2p_rate_{res['deal_id']}_0_1", icon_custom_emoji_id="5393194986252542669", style="success"),
+                InlineKeyboardButton(text="1", callback_data=f"p2p_rate_{res['deal_id']}_0_-1", icon_custom_emoji_id="5382261056078881010", style="danger")
+            ],
+            [
+                InlineKeyboardButton(text="В меню обмена", callback_data="p2p_main", style="primary")
+            ]
+        ]
     )
     try:
         await callback.message.edit_text(succ_text, reply_markup=kb, parse_mode=ParseMode.HTML)
@@ -12092,8 +12110,8 @@ async def cb_p2p_confirm_buy(callback: types.CallbackQuery):
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="👍 +1", callback_data=f"p2p_rate_{res['deal_id']}_{seller_id}_1"),
-                InlineKeyboardButton(text="👎 -1", callback_data=f"p2p_rate_{res['deal_id']}_{seller_id}_-1")
+                InlineKeyboardButton(text="1", callback_data=f"p2p_rate_{res['deal_id']}_{seller_id}_1", icon_custom_emoji_id="5393194986252542669", style="success"),
+                InlineKeyboardButton(text="1", callback_data=f"p2p_rate_{res['deal_id']}_{seller_id}_-1", icon_custom_emoji_id="5382261056078881010", style="danger")
             ],
             [
                 InlineKeyboardButton(text="В меню обмена", callback_data="p2p_main", style="primary")
@@ -12122,7 +12140,10 @@ async def cb_p2p_rate_deal(callback: types.CallbackQuery):
             INSERT INTO p2p_deal_ratings (deal_id, rater_id, target_id, rating_change, created_at)
             VALUES (?, ?, ?, ?, ?)
         ''', (deal_id, rater_id, target_id, delta, now_str))
-        cursor.execute("UPDATE p2p_accounts SET rating = rating + ? WHERE user_id = ?", (delta, target_id))
+        if target_id == 0:
+            cursor.execute("INSERT INTO p2p_accounts (user_id, rating) VALUES (0, 100) ON CONFLICT (user_id) DO UPDATE SET rating = p2p_accounts.rating + ?", (delta,))
+        else:
+            cursor.execute("UPDATE p2p_accounts SET rating = rating + ? WHERE user_id = ?", (delta, target_id))
         conn.commit()
         await callback.answer("Спасибо за отзыв!", show_alert=True)
     except Exception:
@@ -12346,7 +12367,15 @@ async def cb_p2p_confirm_sell_bot(callback: types.CallbackQuery):
         f'<tg-emoji emoji-id="5418238674267556907">⭐</tg-emoji> Баланс: <b>{format_number(get_user(callback.from_user.id)["balance"])} mCoin</b>'
     )
     kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="В меню обмена", callback_data="p2p_main", style="primary")]]
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="1", callback_data=f"p2p_rate_{res['deal_id']}_0_1", icon_custom_emoji_id="5393194986252542669", style="success"),
+                InlineKeyboardButton(text="1", callback_data=f"p2p_rate_{res['deal_id']}_0_-1", icon_custom_emoji_id="5382261056078881010", style="danger")
+            ],
+            [
+                InlineKeyboardButton(text="В меню обмена", callback_data="p2p_main", style="primary")
+            ]
+        ]
     )
     try:
         await callback.message.edit_text(succ_text, reply_markup=kb, parse_mode=ParseMode.HTML)
@@ -12487,8 +12516,8 @@ async def cb_p2p_confirm_sell_buyer(callback: types.CallbackQuery):
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="👍 +1", callback_data=f"p2p_rate_{res['deal_id']}_{buyer_id}_1"),
-                InlineKeyboardButton(text="👎 -1", callback_data=f"p2p_rate_{res['deal_id']}_{buyer_id}_-1")
+                InlineKeyboardButton(text="1", callback_data=f"p2p_rate_{res['deal_id']}_{buyer_id}_1", icon_custom_emoji_id="5393194986252542669", style="success"),
+                InlineKeyboardButton(text="1", callback_data=f"p2p_rate_{res['deal_id']}_{buyer_id}_-1", icon_custom_emoji_id="5382261056078881010", style="danger")
             ],
             [
                 InlineKeyboardButton(text="В меню обмена", callback_data="p2p_main", style="primary")
