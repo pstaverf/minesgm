@@ -226,7 +226,13 @@ async function apiRequest(path, method = "GET", body = null) {
     try {
         data = JSON.parse(text);
     } catch (_) {
-        data = { error: text || "Ошибка ответа сервера" };
+        let msg = "Ошибка запроса";
+        if (res.status === 500) {
+            msg = "Ошибка сервера, попробуйте снова";
+        } else if (text && text.length < 100 && !text.includes("<html")) {
+            msg = text;
+        }
+        data = { error: msg };
     }
     if (!res.ok || data.error) {
         throw new Error(data.error || "Ошибка запроса");

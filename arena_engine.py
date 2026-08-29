@@ -113,8 +113,13 @@ class ArenaEngine:
             self.active_users[user_id] = time.time()
     def get_online_count(self):
         now = time.time()
-        active = [uid for uid, t in self.active_users.items() if now - t < 60.0]
-        self.active_users = {uid: self.active_users[uid] for uid in active}
+        active = []
+        for uid, val in list(self.active_users.items()):
+            t = val.get("lastSeen", 0) if isinstance(val, dict) else (val if isinstance(val, (int, float)) else 0)
+            if now - t < 60.0:
+                active.append(uid)
+            else:
+                self.active_users.pop(uid, None)
         return max(1, len(active))
     def create_new_round(self):
         now = datetime.now(MSK_TZ)

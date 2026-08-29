@@ -1,4 +1,6 @@
 import os
+import logging
+import hashlib
 import secrets
 import asyncio
 import random
@@ -14032,20 +14034,19 @@ async def p2p_rate_updater_task():
 
 # --- WEBAPP & ARENA HTTP API HANDLERS ---
 
-def parse_telegram_init_data(init_data: str, bot_token: str):
+def parse_telegram_init_data(init_data: str, bot_token: str = ""):
     if not init_data:
         return None
     try:
-        vals = dict(urllib.parse.parse_qsl(init_data))
-        if "hash" not in vals:
-            return None
-        hash_val = vals.pop("hash")
-        data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(vals.items()))
-        secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
-        calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-        if calculated_hash == hash_val:
-            user_raw = vals.get("user", "{}")
-            return json.loads(user_raw)
+        raw = init_data
+        if "%" in raw:
+            try:
+                raw = urllib.parse.unquote(raw)
+            except Exception:
+                pass
+        parsed = dict(urllib.parse.parse_qsl(raw))
+        if "user" in parsed:
+            return json.loads(parsed["user"])
     except Exception:
         pass
     return None
@@ -14095,71 +14096,57 @@ async def fetch_user_telegram_avatar(user_id: int, fallback: str = "") -> str:
     return f"/api/avatar/{user_id}"
 
 
-def parse_telegram_init_data(init_data: str, bot_token: str = ""):
-    if not init_data:
-        return None
-    try:
-        raw = init_data
-        if "%" in raw:
-            try:
-                raw = urllib.parse.unquote(raw)
-            except Exception:
-                pass
-        parsed = dict(urllib.parse.parse_qsl(raw))
-        if "user" in parsed:
-            return json.loads(parsed["user"])
-    except Exception:
-        pass
-    return None
-
-
 async def handle_api_me(request: web.Request):
-    init_data = request.headers.get("X-Telegram-Init-Data")
-    user_info = parse_telegram_init_data(init_data, BOT_TOKEN) if init_data else None
+    try:
+        init_data = request.headers.get("X-Telegram-Init-Data")
+        user_info = parse_telegram_init_data(init_data, BOT_TOKEN) if init_data else None
 
-    if user_info:
-        user_id = user_info.get("id")
-        first_name = user_info.get("first_name", "Игрок")
-        username = user_info.get("username", "")
-        avatar = user_info.get("photo_url", "")
-    else:
-        try:
-            user_id = int(request.headers.get("X-User-Id", 0))
-        except Exception:
-            user_id = 0
-        first_name = urllib.parse.unquote(request.headers.get("X-User-Name", "")) or "Игрок"
-        username = urllib.parse.unquote(request.headers.get("X-User-Username", "")) or ""
-        avatar = ""
+        if user_info:
+            user_id = int(user_info.get("id", 0))
+            first_name = user_info.get("first_name", "Игрок")
+            username = user_info.get("username", "")
+            avatar = user_info.get("photo_url", "")
+        else:
+            try:
+                user_id = int(request.headers.get("X-User-Id", 0))
+            except Exception:
+                user_id = 0
+            first_name = urllib.parse.unquote(request.headers.get("X-User-Name", "")) or "Игрок"
+            username = urllib.parse.unquote(request.headers.get("X-User-Username", "")) or ""
+            avatar = ""
 
-    if not user_id:
-        return web.json_response({"error": "User not authorized"}, status=401)
+        if not user_id:
+            return web.json_response({"error": "User not authorized"}, status=401)
 
-    user = get_user(user_id)
-    if user:
-        if first_name and first_name != "Игрок" and (not user.get("first_name") or user.get("first_name") == "Игрок"):
-            update_user(user_id, first_name=first_name, username=username or user.get("username"))
-            user = get_user(user_id)
-        elif not first_name or first_name == "Игрок":
-            if user.get("first_name"):
-                first_name = user.get("first_name")
-            if user.get("username") and not username:
-                username = user.get("username")
+        user = get_user(user_id)
+        if user:
+            if first_name and first_name != "Игрок" and (not user.get("first_name") or user.get("first_name") == "Игрок"):
+                update_user(user_id, first_name=first_name, username=username or user.get("username"))
+                user = get_user(user_id)
+            elif not first_name or first_name == "Игрок":
+                if user.get("first_name"):
+                    first_name = user.get("first_name")
+                if user.get("username") and not username:
+                    username = user.get("username")
 
-    db_first_name = user.get("first_name") or first_name or "Игрок"
-    db_username = user.get("username") or username or ""
+        db_first_name = user.get("first_name") or first_name or "Игрок"
+        db_username = user.get("username") or username or ""
 
-    arena_engine.touch_user(user_id)
-    real_avatar = await fetch_user_telegram_avatar(user_id, avatar)
+        arena_engine.touch_user(user_id)
+        real_avatar = await fetch_user_telegram_avatar(user_id, avatar)
 
-    return web.json_response({
-        "user": {
-            "id": user_id,
-            "first_name": db_first_name,
-            "username": db_username,
-            "balance": user.get("balance", 0) if user else 0,
-            "avatar": real_avatar
-        }
-    })
+        return web.json_response({
+            "user": {
+                "id": user_id,
+                "first_name": db_first_name,
+                "username": db_username,
+                "balance": user.get("balance", 0) if user else 0,
+                "avatar": real_avatar
+            }
+        })
+    except Exception as e:
+        logging.error(f"handle_api_me error: {e}")
+        return web.json_response({"error": "Ошибка получения профиля"}, status=400)
 
 
 async def handle_rounds_active(request: web.Request):
@@ -14174,39 +14161,42 @@ async def handle_rounds_active(request: web.Request):
 
 
 async def handle_rounds_join(request: web.Request):
-    round_id = int(request.match_info.get("round_id", 0))
     try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    amount = int(body.get("amount", 0))
-    client_avatar = body.get("avatar", "")
-    if amount < 1000:
-        return web.json_response({"error": "Минимальная ставка 1 000 m¢"}, status=400)
-
-    init_data = request.headers.get("X-Telegram-Init-Data")
-    user_info = parse_telegram_init_data(init_data, BOT_TOKEN) if init_data else None
-
-    if user_info:
-        user_id = user_info.get("id")
-        first_name = user_info.get("first_name", "Игрок")
-        username = user_info.get("username", "")
-        avatar = user_info.get("photo_url", "") or client_avatar
-    else:
+        round_id = int(request.match_info.get("round_id", 0))
         try:
-            user_id = int(body.get("user_id") or request.headers.get("X-User-Id", 0))
+            body = await request.json()
         except Exception:
-            user_id = 0
-        first_name = body.get("first_name") or urllib.parse.unquote(request.headers.get("X-User-Name", "")) or "Игрок"
-        username = body.get("username") or urllib.parse.unquote(request.headers.get("X-User-Username", "")) or ""
-        avatar = client_avatar
+            body = {}
 
-    if not user_id:
-        return web.json_response({"error": "User not authorized"}, status=401)
+        amount = int(body.get("amount", 0) or 0)
+        client_avatar = body.get("avatar", "")
+        if amount < 1000:
+            return web.json_response({"error": "Минимальная ставка 1 000 m¢"}, status=400)
 
-    user = get_user(user_id)
-    if user:
+        init_data = request.headers.get("X-Telegram-Init-Data")
+        user_info = parse_telegram_init_data(init_data, BOT_TOKEN) if init_data else None
+
+        if user_info:
+            user_id = int(user_info.get("id", 0))
+            first_name = user_info.get("first_name", "Игрок")
+            username = user_info.get("username", "")
+            avatar = user_info.get("photo_url", "") or client_avatar
+        else:
+            try:
+                user_id = int(body.get("user_id") or request.headers.get("X-User-Id", 0))
+            except Exception:
+                user_id = 0
+            first_name = body.get("first_name") or urllib.parse.unquote(request.headers.get("X-User-Name", "")) or "Игрок"
+            username = body.get("username") or urllib.parse.unquote(request.headers.get("X-User-Username", "")) or ""
+            avatar = client_avatar
+
+        if not user_id:
+            return web.json_response({"error": "User not authorized"}, status=401)
+
+        user = get_user(user_id)
+        if not user:
+            return web.json_response({"error": "Пользователь не найден"}, status=404)
+
         if (not first_name or first_name == "Игрок") and user.get("first_name"):
             first_name = user.get("first_name")
         if not username and user.get("username"):
@@ -14214,22 +14204,51 @@ async def handle_rounds_join(request: web.Request):
         if first_name and first_name != "Игрок" and not user.get("first_name"):
             update_user(user_id, first_name=first_name, username=username or user.get("username"))
 
-    if not user or user["balance"] < amount:
-        return web.json_response({"error": "Недостаточно mCoin на балансе!"}, status=400)
+        if user.get("balance", 0) < amount:
+            return web.json_response({"error": "Недостаточно mCoin на балансе!"}, status=400)
 
-    # Deduct balance
-    if not update_user(user_id, balance=user["balance"] - amount):
-        return web.json_response({"error": "Ошибка списания средств"}, status=500)
+        # Verify round state before deducting funds
+        if not arena_engine.current_round or arena_engine.current_round.get("status") not in ["waiting", "launching"]:
+            return web.json_response({"error": "Раунд уже запущен, дождитесь следующего!"}, status=400)
 
-    real_avatar = await fetch_user_telegram_avatar(user_id, avatar)
-    success, msg = arena_engine.add_bet(user_id, first_name, username, amount, real_avatar)
-    if not success:
-        # Refund
-        update_user(user_id, balance=user["balance"])
-        return web.json_response({"error": msg}, status=400)
+        # Deduct balance securely
+        deduct_ok = False
+        try:
+            with arena_engine.get_db() as db_conn:
+                db_cur = db_conn.cursor()
+                db_cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ? AND balance >= ?", (amount, user_id, amount))
+                db_conn.commit()
+                if db_cur.rowcount > 0:
+                    deduct_ok = True
+        except Exception as db_e:
+            logging.error(f"DB balance deduction error: {db_e}")
 
-    await broadcast_arena_state()
-    return web.json_response({"success": True, "round": arena_engine.get_public_state()})
+        if not deduct_ok:
+            if not update_user(user_id, balance=user["balance"] - amount):
+                return web.json_response({"error": "Недостаточно mCoin на балансе!"}, status=400)
+
+        real_avatar = await fetch_user_telegram_avatar(user_id, avatar)
+        success, msg = arena_engine.add_bet(user_id, first_name, username, amount, real_avatar)
+        if not success:
+            # Refund
+            try:
+                with arena_engine.get_db() as db_conn:
+                    db_cur = db_conn.cursor()
+                    db_cur.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+                    db_conn.commit()
+            except Exception:
+                update_user(user_id, balance=user["balance"])
+            return web.json_response({"error": msg}, status=400)
+
+        try:
+            await broadcast_arena_state()
+        except Exception as bc_e:
+            logging.warning(f"Broadcast warning: {bc_e}")
+
+        return web.json_response({"success": True, "round": arena_engine.get_public_state()})
+    except Exception as e:
+        logging.error(f"handle_rounds_join error: {e}", exc_info=True)
+        return web.json_response({"error": f"Ошибка ставки: {str(e)}"}, status=400)
 
 
 arena_websockets = set()
@@ -14376,10 +14395,7 @@ async def on_shutdown(bot: Bot) -> None:
     await bot.delete_webhook()
 
 
-def main():
-    dp.startup.register(on_startup)
-    dp.shutdown.register(on_shutdown)
-
+def create_app():
     app = web.Application()
 
     # WebApp routes & APIs
@@ -14398,6 +14414,15 @@ def main():
     app.router.add_get('/api/arena/history', handle_api_arena_history)
     app.router.add_get('/api/arena/replay/{round_id}', handle_api_arena_replay)
 
+    return app
+
+
+def main():
+    dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
+
+    app = create_app()
+
     webhook_requests_handler = SimpleRequestHandler(
         dispatcher=dp,
         bot=bot,
@@ -14411,4 +14436,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
