@@ -68,7 +68,8 @@ CREATE TABLE IF NOT EXISTS game_stats (
     basketball BIGINT DEFAULT 0,
     football BIGINT DEFAULT 0,
     roulette BIGINT DEFAULT 0,
-    twentyone BIGINT DEFAULT 0
+    twentyone BIGINT DEFAULT 0,
+    gold BIGINT DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS transfers_history (
@@ -284,6 +285,9 @@ CREATE INDEX IF NOT EXISTS idx_arena_history_round ON arena_history(round_id);
 CREATE INDEX IF NOT EXISTS idx_arena_history_winner ON arena_history(winner_id);
 CREATE INDEX IF NOT EXISTS idx_temple_gifts_sender ON temple_gifts_history(sender_id);
 CREATE INDEX IF NOT EXISTS idx_temple_gifts_receiver ON temple_gifts_history(receiver_id);
+
+ALTER TABLE game_stats ADD COLUMN IF NOT EXISTS twentyone BIGINT DEFAULT 0;
+ALTER TABLE game_stats ADD COLUMN IF NOT EXISTS gold BIGINT DEFAULT 0;
 """
 
 

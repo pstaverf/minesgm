@@ -459,8 +459,11 @@ def add_game_history(user_id, game_type, bet, result, win_amount=0, created_at_s
         ''', (user_id, game_type, bet, result, win_amount, created_at_str))
         
         cursor.execute('INSERT INTO game_stats (user_id) VALUES (?) ON CONFLICT (user_id) DO NOTHING', (user_id,))
-        if game_type in ["mines", "tower", "diamonds", "crash", "slots", "bowling", "darts", "basketball", "football", "twentyone"]:
-            cursor.execute(f'UPDATE game_stats SET {game_type} = {game_type} + 1 WHERE user_id = ?', (user_id,))
+        if game_type in ["mines", "tower", "diamonds", "crash", "slots", "bowling", "darts", "basketball", "football", "twentyone", "gold"]:
+            try:
+                cursor.execute(f'UPDATE game_stats SET {game_type} = {game_type} + 1 WHERE user_id = ?', (user_id,))
+            except Exception:
+                pass
         conn.commit()
 
         try:
@@ -475,21 +478,22 @@ def add_game_history(user_id, game_type, bet, result, win_amount=0, created_at_s
 
 def get_user_stats(user_id):
     try:
-        cursor.execute('SELECT mines, tower, diamonds, crash, slots, bowling, darts, basketball, football, COALESCE(twentyone, 0) FROM game_stats WHERE user_id = ?', (user_id,))
+        cursor.execute('SELECT mines, tower, diamonds, crash, slots, bowling, darts, basketball, football, COALESCE(twentyone, 0), COALESCE(gold, 0) FROM game_stats WHERE user_id = ?', (user_id,))
         row = cursor.fetchone()
         if row:
-            mines, tower, diamonds, crash, slots, bowling, darts, basketball, football, twentyone = row
+            mines, tower, diamonds, crash, slots, bowling, darts, basketball, football, twentyone, gold = row
             slots = slots or 0
             bowling = bowling or 0
             darts = darts or 0
             basketball = basketball or 0
             football = football or 0
             twentyone = twentyone or 0
-            total = mines + tower + diamonds + crash + slots + bowling + darts + basketball + football + twentyone
+            gold = gold or 0
+            total = mines + tower + diamonds + crash + slots + bowling + darts + basketball + football + twentyone + gold
             return {
                 "mines": mines, "tower": tower, "diamonds": diamonds, "crash": crash,
                 "slots": slots, "bowling": bowling, "darts": darts, "basketball": basketball,
-                "football": football, "twentyone": twentyone, "total": total
+                "football": football, "twentyone": twentyone, "gold": gold, "total": total
             }
         else:
             cursor.execute('SELECT games FROM users WHERE user_id = ?', (user_id,))
@@ -498,10 +502,10 @@ def get_user_stats(user_id):
             return {
                 "mines": total_legacy, "tower": 0, "diamonds": 0, "crash": 0,
                 "slots": 0, "bowling": 0, "darts": 0, "basketball": 0, "football": 0,
-                "twentyone": 0, "total": total_legacy
+                "twentyone": 0, "gold": 0, "total": total_legacy
             }
     except Exception:
-        return {"mines": 0, "tower": 0, "diamonds": 0, "crash": 0, "slots": 0, "bowling": 0, "darts": 0, "basketball": 0, "football": 0, "twentyone": 0, "total": 0}
+        return {"mines": 0, "tower": 0, "diamonds": 0, "crash": 0, "slots": 0, "bowling": 0, "darts": 0, "basketball": 0, "football": 0, "twentyone": 0, "gold": 0, "total": 0}
 
 
 def get_user_history(user_id, limit=5, offset=0):
@@ -926,6 +930,7 @@ def is_bot_command(text, chat_type="private"):
         "мины", "м", "башня", "бш", "игры", "игра", "баланс", "б", "бал",
         "бонус", "топ", "дать", "пер", "раздача", "роздача",
         "история", "недавние", "алмазы", "алмаз", "diamond",
+        "золото", "gold", "голд", "з",
         "краш", "crash", "кр",
         "слоты", "слот", "slots", "slot",
         "боулинг", "bowling", "бо",
@@ -1253,6 +1258,26 @@ def get_multiplier(mine_count, level):
         return 1.00
 
 
+GOLD_ROWS = 12
+GOLD_COLS = 2
+GOLD_MULTIPLIERS = {
+    1: 2,
+    2: 4,
+    3: 8,
+    4: 16,
+    5: 32,
+    6: 64,
+    7: 128,
+    8: 256,
+    9: 512,
+    10: 1024,
+    11: 2048,
+    12: 4096
+}
+GOLD_Q_EMOJI = '<tg-emoji emoji-id="5436113877181941026">❓</tg-emoji>'
+GOLD_BOOM_EMOJI = '<tg-emoji emoji-id="5276032951342088188">💥</tg-emoji>'
+
+
 def get_chat_key(user_id, chat_id):
     return f"{user_id}_{chat_id}"
 
@@ -1275,6 +1300,9 @@ def save_active_game_to_db(game_id, g):
                 "deck": g.get("deck", []),
                 "user_first_name": g.get("user_first_name", "")
             })
+        elif gtype == "gold":
+            mp_json = json.dumps(g.get("mine_positions", []))
+            rev_json = json.dumps(g.get("revealed", {}))
         else:
             mp = g.get("mine_positions")
             if isinstance(mp, set):
@@ -1284,7 +1312,7 @@ def save_active_game_to_db(game_id, g):
             else:
                 mp_json = json.dumps(mp)
 
-            rev = list(g.get("revealed", []))
+            rev = list(g.get("revealed", [])) if not isinstance(g.get("revealed"), dict) else g.get("revealed")
             rev_json = json.dumps(rev)
 
         dt_str = g.get("created_at_str")
@@ -1383,6 +1411,40 @@ def load_all_active_games_from_db():
                     "expired": False,
                     "message_id": None,
                     "user_first_name": user_first_name
+                }
+                if not bool(gover):
+                    active_games[oid] = gid
+                continue
+
+            if gtype == "gold":
+                try:
+                    mine_positions = json.loads(mp_json) if mp_json else []
+                    raw_rev = json.loads(rev_json) if rev_json else {}
+                    revealed = {int(k): int(v) for k, v in raw_rev.items()} if isinstance(raw_rev, dict) else {}
+                except Exception:
+                    mine_positions, revealed = [], {}
+
+                games[gid] = {
+                    "type": gtype,
+                    "stage": stage,
+                    "bet": bet,
+                    "mine_positions": mine_positions,
+                    "revealed": revealed,
+                    "level": level,
+                    "game_over": bool(gover),
+                    "won": bool(won),
+                    "exploded_mine": exp_mine,
+                    "owner_id": oid,
+                    "chat_id": cid,
+                    "cashed_out": False,
+                    "bet_placed": len(revealed) > 0,
+                    "moves_count": len(revealed),
+                    "created_at": created_dt,
+                    "created_at_str": dt_str,
+                    "settled": False,
+                    "expired": False,
+                    "message_id": None,
+                    "is_edited": False
                 }
                 if not bool(gover):
                     active_games[oid] = gid
@@ -1515,7 +1577,7 @@ async def check_expired_games_task():
                 uid = gdata["owner_id"]
                 bet = gdata.get("bet", 0)
                 gtype = gdata.get("type", "mines")
-                name_map = {"mines": "мины", "tower": "башня", "diamonds": "алмазы", "twentyone": "21"}
+                name_map = {"mines": "мины", "tower": "башня", "diamonds": "алмазы", "twentyone": "21", "gold": "золото"}
                 game_title = name_map.get(gtype, "мины")
 
                 udata = get_user(uid)
@@ -1713,6 +1775,12 @@ async def show_modes_games_catalog(callback: types.CallbackQuery, user_id, user_
         ],
         [
             InlineKeyboardButton(
+                text="🌼 Золото",
+                callback_data="gold",
+                style="primary",
+                icon_custom_emoji_id="5370731117588523522"
+            ),
+            InlineKeyboardButton(
                 text="⚔️ WebApp: Арена",
                 web_app=types.WebAppInfo(url=f"{WEBHOOK_HOST}/app")
             )
@@ -1856,7 +1924,8 @@ async def show_recent_games_menu(message_or_callback, user_id, user_name, page=1
         "mines": "Мины",
         "tower": "Башня",
         "diamonds": "Алмазы",
-        "twentyone": "21 (Очко)"
+        "twentyone": "21 (Очко)",
+        "gold": "Золото"
     }
 
     for gid, gdata in page_games:
@@ -1963,6 +2032,7 @@ async def process_history_stats(callback: types.CallbackQuery):
         f'<tg-emoji emoji-id="5283080528818360566">🚀</tg-emoji> Краш: {stats["crash"]}\n'
         f'🛕 Башня: {stats["tower"]}\n'
         f'💠 Алмазы: {stats["diamonds"]}\n'
+        f'🌼 Золото: {stats.get("gold", 0)}\n'
         f'🎰 Слоты: {stats.get("slots", 0)}\n'
         f'🎳 Боулинг: {stats.get("bowling", 0)}\n'
         f'🎯 Дартс: {stats.get("darts", 0)}\n'
@@ -2029,6 +2099,7 @@ async def process_history_games(callback: types.CallbackQuery):
         "mines": ("💣", "Мины"),
         "tower": ("🛕", "Башня"),
         "diamonds": ("💠", "Алмазы"),
+        "gold": ("🌼", "Золото"),
         "crash": ("🚀", "Краш"),
         "slots": ("🎰", "Слоты"),
         "bowling": ("🎳", "Боулинг"),
@@ -2145,6 +2216,8 @@ async def process_resume_game(callback: types.CallbackQuery):
         await show_diamonds_grid_from_callback(callback, user_id, game_id)
     elif gtype == "twentyone":
         await show_twentyone_from_callback(callback, user_id, game_id)
+    elif gtype == "gold":
+        await show_gold_grid_from_message(callback, user_id, game_id)
     else:
         await callback.answer("Неизвестный тип игры!", show_alert=True)
 
@@ -3419,6 +3492,114 @@ async def cmd_diamonds(message: types.Message):
 
     except ValueError:
         await show_diamonds_info(message, user_id)
+
+
+# --- GOLD GAME (ЗОЛОТО) ---
+
+async def show_gold_info(message_or_callback, user_id, is_callback=False):
+    if hasattr(message_or_callback, "from_user") and message_or_callback.from_user:
+        user_name = message_or_callback.from_user.first_name or "Игрок"
+    else:
+        user_name = "Игрок"
+    user_link = f'<a href="tg://user?id={user_id}">{html.escape(user_name)}</a>'
+
+    text = (
+        '<blockquote expandable><i><tg-emoji emoji-id="5307594157739515229">ℹ️</tg-emoji> Золото — это игра, в которой необходимо угадать, где спрятано золото. Вам нужно открывать по одной ячейке с золотом на каждом из 12 уровней.\n'
+        '📊 Лимиты:\n'
+        'RTP: ~100%\n'
+        'Макс. множитель: х4096\n'
+        'Макс. ставка: 200kk m¢\n'
+        'Макс. выигрыш: 1kkk m¢</i></blockquote>\n\n'
+        f'<i><tg-emoji emoji-id="5372981976804366741">🤖</tg-emoji> {user_link}, чтобы начать игру, используй команду:</i>\n\n'
+        '<b><u>💰 /gold [ставка]</u></b>\n\n'
+        'Пример: <code>/gold 100</code>\n'
+        'Пример: <code>золото 100</code>'
+    )
+
+    keyboard = None
+    if is_callback:
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Назад",
+                        callback_data="catalog_modes",
+                        icon_custom_emoji_id="5255703720078879038"
+                    )
+                ]
+            ]
+        )
+
+    if isinstance(message_or_callback, types.Message):
+        await message_or_callback.answer(
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+            disable_web_page_preview=True
+        )
+    else:
+        try:
+            await message_or_callback.message.edit_text(
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
+        except Exception:
+            await message_or_callback.message.answer(
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
+
+
+@dp.message(Command("gold", "золото", "голд"))
+@dp.message(lambda message: message.text and re.match(r'^(золото|gold|голд)\b', message.text, re.IGNORECASE))
+async def cmd_gold(message: types.Message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    text = message.text.strip()
+
+    parts = re.split(r'\s+', text, maxsplit=1)
+
+    if len(parts) == 1:
+        await show_gold_info(message, user_id)
+        return
+
+    unplayed = get_active_unplayed_games(user_id)
+    if unplayed:
+        await message.answer("<i>У вас уже есть игра! Закончите или доиграйте активную игру.</i>", parse_mode=ParseMode.HTML)
+        return
+
+    bet_str = parts[1].strip()
+    user_data = get_user(user_id)
+
+    try:
+        bet = resolve_bet_amount(bet_str, user_data["balance"])
+        if bet is None:
+            await message.answer("<i>Неверный формат суммы! Пример: 100, 1.4кк, 120кк, все, вб, пол</i>", parse_mode=ParseMode.HTML)
+            return
+
+        if bet < 1:
+            if user_data["balance"] < 1:
+                await message.answer("<i>Ваш баланс равен 0! Пополните баланс чтобы играть.</i>", parse_mode=ParseMode.HTML)
+            else:
+                await message.answer("<i>Ставка должна быть больше 0!</i>", parse_mode=ParseMode.HTML)
+            return
+
+        if bet > 200000000:
+            await message.answer("<i>Максимальная ставка: 200kk m¢!</i>", parse_mode=ParseMode.HTML)
+            return
+
+        if user_data["balance"] < bet:
+            await message.answer(f"<i>Недостаточно средств! Ваш баланс: {format_number(user_data['balance'])} mCoin</i>", parse_mode=ParseMode.HTML)
+            return
+
+        await start_gold_game_from_command(message, user_id, chat_id, bet)
+
+    except ValueError:
+        await show_gold_info(message, user_id)
 
 
 # --- WEBAPP & ARENA COMMAND ---
@@ -7917,6 +8098,449 @@ async def process_diamonds_back_to_catalog(callback: types.CallbackQuery):
 
     is_group = callback.message.chat.type in ["group", "supergroup"]
     await show_catalog(callback, user_id, callback.from_user.first_name, callback.message.chat.id, is_group)
+
+
+# --- GOLD GAME (ЗОЛОТО) EXECUTION & CALLBACKS ---
+
+async def start_gold_game_from_command(message, user_id, chat_id, bet):
+    key = get_chat_key(user_id, chat_id)
+    if key in user_messages:
+        for msg_id in user_messages[key]:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception:
+                pass
+        user_messages[key] = []
+
+    game_id = get_next_game_id()
+
+    user_data = get_user(user_id)
+    if not update_user(user_id, balance=user_data["balance"] - bet):
+        await message.answer("<i>Ошибка списания средств!</i>", parse_mode=ParseMode.HTML)
+        return
+
+    now = datetime.now()
+    mine_positions = [secrets.SystemRandom().randint(0, 1) for _ in range(12)]
+    game_data = {
+        "type": "gold",
+        "stage": "playing",
+        "bet": bet,
+        "mine_positions": mine_positions,
+        "revealed": {},
+        "level": 0,
+        "game_over": False,
+        "won": False,
+        "exploded_mine": None,
+        "owner_id": user_id,
+        "chat_id": chat_id,
+        "cashed_out": False,
+        "bet_placed": False,
+        "moves_count": 0,
+        "created_at": now,
+        "created_at_str": now.strftime("%d-%m-%Y %H:%M:%S"),
+        "settled": False,
+        "expired": False,
+        "message_id": None,
+        "is_edited": False
+    }
+
+    games[game_id] = game_data
+    active_games[user_id] = game_id
+    save_active_game_to_db(game_id, game_data)
+
+    await show_gold_grid_from_message(message, user_id, game_id)
+
+
+def build_gold_board_text(game, bet, level, game_over, won, exploded_mine):
+    rows_text = []
+    # Render from row 11 (4096x) down to row 0 (2x)
+    for lvl_idx in range(GOLD_ROWS - 1, -1, -1):
+        mult = GOLD_MULTIPLIERS[lvl_idx + 1]
+        amt_str = f"{format_number(bet * mult)} m¢ ({mult}x)"
+        mine_col = game["mine_positions"][lvl_idx]
+
+        if not (game_over or won):
+            if lvl_idx < level:
+                chosen = game["revealed"].get(lvl_idx)
+                c0 = "💰" if chosen == 0 else GOLD_Q_EMOJI
+                c1 = "💰" if chosen == 1 else GOLD_Q_EMOJI
+            else:
+                c0 = GOLD_Q_EMOJI
+                c1 = GOLD_Q_EMOJI
+        elif game_over and exploded_mine is not None:
+            if lvl_idx < level:
+                chosen = game["revealed"].get(lvl_idx)
+                c0 = "💰" if chosen == 0 else "🧨"
+                c1 = "💰" if chosen == 1 else "🧨"
+            elif lvl_idx == level:
+                if mine_col == 0:
+                    c0 = GOLD_BOOM_EMOJI
+                    c1 = "💸"
+                else:
+                    c0 = "💸"
+                    c1 = GOLD_BOOM_EMOJI
+            else:
+                c0 = "🧨" if mine_col == 0 else "💸"
+                c1 = "🧨" if mine_col == 1 else "💸"
+        else:
+            # Won
+            if lvl_idx < level:
+                chosen = game["revealed"].get(lvl_idx)
+                c0 = "💰" if chosen == 0 else "🧨"
+                c1 = "💰" if chosen == 1 else "🧨"
+            else:
+                c0 = "🧨" if mine_col == 0 else "💸"
+                c1 = "🧨" if mine_col == 1 else "💸"
+
+        rows_text.append(f"| {c0}| {c1}| {amt_str}")
+
+    return "\n".join(rows_text)
+
+
+async def show_gold_grid_from_message(message_or_callback, user_id, game_id, game_over=False, won=False):
+    game = games.get(game_id)
+    if not game:
+        return
+
+    if game["owner_id"] != user_id:
+        return
+
+    bet = game["bet"]
+    level = game["level"]
+    exploded_mine = game.get("exploded_mine")
+
+    if hasattr(message_or_callback, "from_user") and message_or_callback.from_user:
+        raw_name = message_or_callback.from_user.first_name or "Игрок"
+    else:
+        raw_name = "Игрок"
+    user_link = f'<a href="tg://user?id={user_id}">{html.escape(raw_name)}</a>'
+
+    current_mult = GOLD_MULTIPLIERS.get(level, 1) if level > 0 else 1
+    win_amount = min(1000000000, int(bet * current_mult)) if level > 0 else 0
+
+    if (game_over or won) and not game.get("settled", False):
+        game["settled"] = True
+        if game_over and exploded_mine is not None:
+            user_data = get_user(user_id)
+            update_user(user_id, games=user_data["games"] + 1, lost=user_data["lost"] + bet)
+            add_game_history(user_id, "gold", bet, "lose", 0, game.get("created_at_str"))
+        elif won:
+            user_data = get_user(user_id)
+            update_user(user_id, games=user_data["games"] + 1, balance=user_data["balance"] + win_amount)
+            add_game_history(user_id, "gold", bet, "win", win_amount, game.get("created_at_str"))
+
+    board_text = build_gold_board_text(game, bet, level, game_over, won, exploded_mine)
+
+    if game_over and exploded_mine is not None:
+        text = (
+            f'{user_link}\n'
+            '💥 <b>Золото · Проигрыш!</b>\n'
+            '<code>·····················</code>\n'
+            f'<tg-emoji emoji-id="5881948563591666817">💸</tg-emoji> <b>Ставка:</b> {format_number(bet)} m¢\n'
+            f'⚜️ <b>Пройдено:</b> {level} из 12\n\n'
+            f'{board_text}'
+        )
+    elif won:
+        text = (
+            f'{user_link}\n'
+            '<tg-emoji emoji-id="5436040291507247633">🎉</tg-emoji><b>Золото · Победа!</b> <tg-emoji emoji-id="5427009714745517609">✅</tg-emoji>\n'
+            '<code>·····················</code>\n'
+            f'<tg-emoji emoji-id="5881948563591666817">💸</tg-emoji> <b>Ставка:</b> {format_number(bet)} m¢\n'
+            f'⚜️ <b>Пройдено:</b> {level} из 12\n'
+            f'<tg-emoji emoji-id="5375296873982604963">💰</tg-emoji><b>Выигрыш:</b> х{current_mult} / {format_number(win_amount)} m¢\n\n'
+            f'{board_text}'
+        )
+    else:
+        if level == 0:
+            text = (
+                f'{user_link}\n'
+                ' <tg-emoji emoji-id="5370731117588523522">🌼</tg-emoji><b>Золото · начни игру!</b>\n'
+                '<code>·····················</code>\n'
+                f'<tg-emoji emoji-id="5881948563591666817">💸</tg-emoji> <b>Ставка:</b> {format_number(bet)} m¢\n\n'
+                f'{board_text}'
+            )
+        else:
+            text = (
+                f'{user_link}\n'
+                ' <tg-emoji emoji-id="5472010685560921607">🖥</tg-emoji><b>Золото · игра идёт.</b>\n'
+                '<code>·····················</code>\n'
+                f'<tg-emoji emoji-id="5881948563591666817">💸</tg-emoji> <b>Ставка:</b> {format_number(bet)} m¢\n'
+                f' <tg-emoji emoji-id="5375296873982604963">💰</tg-emoji><b>Выигрыш:</b> х{current_mult} / {format_number(win_amount)} m¢\n\n'
+                f'{board_text}'
+            )
+
+    keyboard = None
+    if not (game_over or won):
+        row1 = [
+            InlineKeyboardButton(
+                text=" ",
+                callback_data=f"gold_cell_{game_id}_{level}_0",
+                style="primary",
+                icon_custom_emoji_id="5436113877181941026"
+            ),
+            InlineKeyboardButton(
+                text=" ",
+                callback_data=f"gold_cell_{game_id}_{level}_1",
+                style="primary",
+                icon_custom_emoji_id="5436113877181941026"
+            )
+        ]
+        buttons = [row1]
+        if level > 0:
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"Забрать {format_number(win_amount)} m¢",
+                    callback_data=f"gold_cashout_{game_id}",
+                    style="success",
+                    icon_custom_emoji_id="5427009714745517609"
+                )
+            ])
+        buttons.append([
+            InlineKeyboardButton(
+                text="Назад",
+                callback_data=f"exit_gold_{game_id}",
+                icon_custom_emoji_id="5255703720078879038"
+            )
+        ])
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    msg = None
+    if isinstance(message_or_callback, types.CallbackQuery):
+        try:
+            msg = await message_or_callback.message.edit_text(
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
+            game["is_edited"] = True
+        except Exception:
+            msg = await message_or_callback.message.answer(
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
+            game["is_edited"] = False
+    else:
+        msg = await message_or_callback.answer(
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+            disable_web_page_preview=True
+        )
+        game["is_edited"] = False
+
+    if msg:
+        game["message_id"] = msg.message_id
+        key = get_chat_key(user_id, game["chat_id"])
+        if key not in game_messages:
+            game_messages[key] = []
+        game_messages[key].append(msg.message_id)
+
+
+# --- CALLBACK HANDLERS: GOLD ---
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("gold_cell_"))
+async def process_gold_cell(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 5:
+        await callback.answer("Ошибка! Попробуйте заново.", show_alert=True)
+        return
+
+    try:
+        game_id = int(data[2])
+        target_row = int(data[3])
+        cell_idx = int(data[4])
+    except ValueError:
+        await callback.answer("Ошибка! Попробуйте заново.", show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    game = games.get(game_id)
+    if not game:
+        await callback.answer("Игра уже завершена.", show_alert=True)
+        return
+
+    if game["owner_id"] != user_id:
+        await callback.answer("Это не ваша игра!", show_alert=True)
+        return
+
+    if game.get("game_over", False) or game.get("won", False) or game.get("cashed_out", False):
+        await callback.answer("Игра уже завершена.", show_alert=True)
+        return
+
+    if game.get("stage") != "playing":
+        await callback.answer("Игра неактивна!", show_alert=True)
+        return
+
+    current_level = game["level"]
+    if target_row != current_level:
+        await callback.answer()
+        return
+
+    if game.get("is_processing", False):
+        await callback.answer()
+        return
+
+    game["is_processing"] = True
+    try:
+        await callback.answer()
+        mine_col = game["mine_positions"][current_level]
+        is_mine = (cell_idx == mine_col)
+
+        if is_mine:
+            game["game_over"] = True
+            game["exploded_mine"] = (current_level, cell_idx)
+            if user_id in active_games and active_games.get(user_id) == game_id:
+                del active_games[user_id]
+            remove_active_game_from_db(game_id)
+            await show_gold_grid_from_message(callback, user_id, game_id, game_over=True)
+            return
+
+        game["revealed"][current_level] = cell_idx
+        game["level"] += 1
+        game["moves_count"] = game.get("moves_count", 0) + 1
+        game["bet_placed"] = True
+
+        if game["level"] >= GOLD_ROWS:
+            game["game_over"] = True
+            game["won"] = True
+            if user_id in active_games and active_games.get(user_id) == game_id:
+                del active_games[user_id]
+            remove_active_game_from_db(game_id)
+            await show_gold_grid_from_message(callback, user_id, game_id, won=True)
+            return
+
+        save_active_game_to_db(game_id, game)
+        await show_gold_grid_from_message(callback, user_id, game_id)
+    finally:
+        game["is_processing"] = False
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("gold_cashout_"))
+async def process_gold_cashout(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 3:
+        await callback.answer("Ошибка! Попробуйте заново.", show_alert=True)
+        return
+
+    try:
+        game_id = int(data[2])
+    except ValueError:
+        await callback.answer("Ошибка! Попробуйте заново.", show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    game = games.get(game_id)
+    if not game:
+        await callback.answer("Игра не найдена!", show_alert=True)
+        return
+
+    if game["owner_id"] != user_id:
+        await callback.answer("Это не ваша игра!", show_alert=True)
+        return
+
+    if game.get("game_over", False) or game.get("won", False) or game.get("cashed_out", False):
+        await callback.answer("Игра уже завершена!", show_alert=True)
+        return
+
+    if game.get("stage") != "playing":
+        await callback.answer("Игра неактивна!", show_alert=True)
+        return
+
+    if game["level"] == 0:
+        await callback.answer("Пройдите хотя бы один уровень!", show_alert=True)
+        return
+
+    if game.get("is_processing", False):
+        await callback.answer()
+        return
+
+    game["is_processing"] = True
+    try:
+        await callback.answer()
+        game["game_over"] = True
+        game["won"] = True
+        game["cashed_out"] = True
+        if user_id in active_games and active_games.get(user_id) == game_id:
+            del active_games[user_id]
+        remove_active_game_from_db(game_id)
+
+        await show_gold_grid_from_message(callback, user_id, game_id, won=True)
+    finally:
+        game["is_processing"] = False
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("exit_gold_"))
+async def process_exit_gold(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 3:
+        await callback.answer("Ошибка! Попробуйте заново.", show_alert=True)
+        return
+
+    try:
+        game_id = int(data[2])
+    except ValueError:
+        await callback.answer("Ошибка! Попробуйте заново.", show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    game = games.get(game_id)
+    if not game:
+        await callback.answer("Игра не найдена!", show_alert=True)
+        return
+
+    if game["owner_id"] != user_id:
+        await callback.answer("Это не ваша игра!", show_alert=True)
+        return
+
+    if game.get("game_over", False) or game.get("won", False) or game.get("cashed_out", False):
+        await callback.answer("Игра уже завершена.", show_alert=True)
+        return
+
+    if game.get("level", 0) > 0:
+        await callback.answer("Нельзя отменить начатую игру! Нажмите «Забрать выигрыш».", show_alert=True)
+        return
+
+    key = f"exit_{user_id}_{game_id}"
+    current_time = datetime.now().timestamp()
+
+    if key in exit_confirm:
+        if current_time - exit_confirm[key] < 10:
+            user_data = get_user(user_id)
+            update_user(user_id, balance=user_data["balance"] + game["bet"])
+
+            try:
+                await callback.bot.delete_message(chat_id=game["chat_id"], message_id=game["message_id"])
+            except Exception:
+                pass
+
+            if game_id in games:
+                del games[game_id]
+            if user_id in active_games and active_games.get(user_id) == game_id:
+                del active_games[user_id]
+            if key in exit_confirm:
+                del exit_confirm[key]
+            remove_active_game_from_db(game_id)
+
+            await callback.message.edit_text(
+                f'<i>✅ Игра отменена. Ставка {format_number(game["bet"])} mCoin возвращена на баланс.</i>',
+                parse_mode=ParseMode.HTML
+            )
+            await callback.answer("Игра отменена!")
+            return
+        else:
+            del exit_confirm[key]
+
+    exit_confirm[key] = current_time
+    await callback.answer("⚠️ Если вы хотите отменить игру, нажмите ещё раз на кнопку назад.", show_alert=True)
+
+
+@dp.callback_query(lambda c: c.data in ["gold", "info_gold"])
+async def process_gold_info_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    await show_gold_info(callback, callback.from_user.id, is_callback=True)
 
 
 # --- 21 (ОЧКО) GAME EXECUTION & CALLBACKS ---
