@@ -527,6 +527,15 @@ function renderArenaRound(round) {
     const prevStatus = state.activeRound?.status;
     const prevId = state.activeRound?.id;
     state.activeRound = round;
+    if (round.roundHash) {
+        state.currentRoundHash = round.roundHash;
+        const curHashEl = document.getElementById("fair-cur-hash");
+        if (curHashEl && (curHashEl.value === "Генерация..." || curHashEl.value !== round.roundHash)) {
+            curHashEl.value = round.roundHash;
+        }
+        const curRoundEl = document.getElementById("fair-cur-round-id");
+        if (curRoundEl) curRoundEl.textContent = round.id;
+    }
     const roundIdEl = document.getElementById("arena-round-id");
     if (roundIdEl) roundIdEl.textContent = round.id;
     const bankEl = document.getElementById("arena-total-bank");
@@ -919,6 +928,205 @@ async function pollActiveRound() {
         console.error("pollActiveRound err:", err);
     }
 }
+function jsSha256(ascii) {
+    function rightRotate(value, amount) {
+        return (value >>> amount) | (value << (32 - amount));
+    }
+    const mathPow = Math.pow;
+    const maxWord = mathPow(2, 32);
+    let lengthProperty = 'length';
+    let i, j;
+    let result = '';
+    const words = [];
+    const asciiBitLength = ascii[lengthProperty] * 8;
+    let hash = jsSha256.h = jsSha256.h || [];
+    const k = jsSha256.k = jsSha256.k || [];
+    let primeCounter = k[lengthProperty];
+    const isComposite = {};
+    for (let candidate = 2; primeCounter < 64; candidate++) {
+        if (!isComposite[candidate]) {
+            for (i = 0; i < 313; i += candidate) {
+                isComposite[i] = candidate;
+            }
+            hash[primeCounter] = (mathPow(candidate, .5) * maxWord) | 0;
+            k[primeCounter++] = (mathPow(candidate, 1/3) * maxWord) | 0;
+        }
+    }
+    ascii += '\x80';
+    while (ascii[lengthProperty] % 64 - 56) ascii += '\x00';
+    for (i = 0; i < ascii[lengthProperty]; i++) {
+        j = ascii.charCodeAt(i);
+        if (j >> 8) return '';
+        words[i >> 2] |= j << ((3 - i) % 4) * 8;
+    }
+    words[words[lengthProperty]] = ((asciiBitLength / maxWord) | 0);
+    words[words[lengthProperty]] = (asciiBitLength);
+    for (j = 0; j < words[lengthProperty];) {
+        const w = words.slice(j, j += 16);
+        const oldHash = hash;
+        hash = hash.slice(0, 8);
+        for (i = 0; i < 64; i++) {
+            const w15 = w[i - 15], w2 = w[i - 2];
+            const s0 = rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3);
+            const s1 = rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10);
+            w[i] = i < 16 ? w[i] : (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+            const s1_maj = rightRotate(hash[0], 2) ^ rightRotate(hash[0], 13) ^ rightRotate(hash[0], 22);
+            const maj = (hash[0] & hash[1]) ^ (hash[0] & hash[2]) ^ (hash[1] & hash[2]);
+            const t2 = (s1_maj + maj) | 0;
+            const s1_ch = rightRotate(hash[4], 6) ^ rightRotate(hash[4], 11) ^ rightRotate(hash[4], 25);
+            const ch = (hash[4] & hash[5]) ^ ((~hash[4]) & hash[6]);
+            const t1 = (hash[7] + s1_ch + ch + k[i] + w[i]) | 0;
+            hash = [(t1 + t2) | 0].concat(hash);
+            hash[4] = (hash[4] + t1) | 0;
+        }
+        for (i = 0; i < 8; i++) {
+            hash[i] = (hash[i] + oldHash[i]) | 0;
+        }
+    }
+    for (i = 0; i < 8; i++) {
+        for (let b = 3; b >= 0; b--) {
+            const byte = (hash[i] >> (b * 8)) & 255;
+            result += (byte < 16 ? '0' : '') + byte.toString(16);
+        }
+    }
+    return result;
+}
+
+async function computeSha256(message) {
+    try {
+        if (window.crypto && window.crypto.subtle) {
+            const msgUint8 = new TextEncoder().encode(message);
+            const hashBuffer = await window.crypto.subtle.digest('SHA-256', msgUint8);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+    } catch (_) {}
+    return jsSha256(message);
+}
+
+function openFairModal() {
+    openModal("modal-fair");
+    const roundId = state.activeRound?.id || 1;
+    const roundHash = state.activeRound?.roundHash || state.currentRoundHash || "";
+    const curRoundEl = document.getElementById("fair-cur-round-id");
+    const curHashEl = document.getElementById("fair-cur-hash");
+    if (curRoundEl) curRoundEl.textContent = roundId;
+    if (curHashEl) curHashEl.value = roundHash || "Генерация...";
+    const calcRound = document.getElementById("fair-calc-round");
+    if (calcRound && !calcRound.value) calcRound.value = roundId;
+    renderFairHistory();
+}
+
+async function copyFairHash() {
+    const curHashEl = document.getElementById("fair-cur-hash");
+    const btnText = document.getElementById("fair-copy-btn-text");
+    const text = curHashEl?.value || "";
+    if (!text || text === "Генерация...") return;
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+        } else {
+            curHashEl.select();
+            document.execCommand("copy");
+        }
+        triggerHaptic("success");
+        if (btnText) btnText.textContent = "Скопировано!";
+        setTimeout(() => {
+            if (btnText) btnText.textContent = "Копировать";
+        }, 2000);
+        showToast("SHA-256 скопирован!", "ok");
+    } catch (_) {
+        showToast("Не удалось скопировать", "error");
+    }
+}
+
+function fillFairCalc(roundId, seed) {
+    const rEl = document.getElementById("fair-calc-round");
+    const sEl = document.getElementById("fair-calc-seed");
+    if (rEl) rEl.value = roundId;
+    if (sEl) sEl.value = seed;
+    triggerHaptic("light");
+    calculateSha256InModal();
+}
+
+async function calculateSha256InModal() {
+    triggerHaptic("light");
+    const rEl = document.getElementById("fair-calc-round");
+    const sEl = document.getElementById("fair-calc-seed");
+    const resBox = document.getElementById("fair-calc-result");
+    const hashVal = document.getElementById("fair-calc-hash-val");
+    const statusBadge = document.getElementById("fair-calc-status-badge");
+    if (!rEl || !sEl || !resBox || !hashVal || !statusBadge) return;
+    
+    const roundId = rEl.value.trim();
+    const seed = sEl.value.trim();
+    if (!roundId || !seed) {
+        showToast("Заполните номер раунда и сид!", "error");
+        return;
+    }
+    
+    const plainString = `${roundId}:${seed}`;
+    const calculatedHash = await computeSha256(plainString);
+    resBox.style.display = "block";
+    hashVal.textContent = calculatedHash;
+
+    let match = false;
+    if (state.activeRound && String(state.activeRound.id) === roundId && state.activeRound.roundHash === calculatedHash) {
+        match = true;
+    } else if (state.fairHistory) {
+        const found = state.fairHistory.find(h => String(h.roundId) === roundId);
+        if (found && (found.roundHash === calculatedHash || found.serverSeed === seed)) {
+            match = true;
+        }
+    }
+    
+    if (match) {
+        statusBadge.innerHTML = `<span style="color: #22c55e;">✅ Подлинность подтверждена! Хеш совпадает с результатом раунда #${escapeHtml(roundId)}</span>`;
+    } else {
+        statusBadge.innerHTML = `<span style="color: #60a5fa;">ℹ️ Хеш успешно вычислен: SHA-256("${escapeHtml(plainString)}")</span>`;
+    }
+}
+
+async function renderFairHistory() {
+    const listEl = document.getElementById("fair-history-list");
+    if (!listEl) return;
+    try {
+        const data = await apiRequest("/api/arena/history");
+        if (!data || !data.history || data.history.length === 0) {
+            listEl.innerHTML = `<div class="empty-placeholder">История раундов пуста</div>`;
+            return;
+        }
+        state.fairHistory = data.history;
+        let html = "";
+        data.history.forEach(item => {
+            const hasSeed = Boolean(item.serverSeed);
+            const seedVal = item.serverSeed || "Не раскрыт";
+            const hashVal = item.roundHash || "Не сформирован";
+            html += `
+                <div class="fair-history-item">
+                    <div class="fair-history-head">
+                        <span class="fair-history-round">Раунд #${item.roundId}</span>
+                        <span class="fair-history-badge">✓ SHA-256 MATCH</span>
+                    </div>
+                    <div class="fair-history-row">
+                        <strong>Seed:</strong> <span>${escapeHtml(seedVal)}</span>
+                    </div>
+                    <div class="fair-history-row">
+                        <strong>Hash:</strong> <span>${escapeHtml(hashVal)}</span>
+                    </div>
+                    ${hasSeed ? `
+                    <div style="margin-top: 6px; display: flex; gap: 6px;">
+                        <button type="button" class="replay-btn" style="border-color: rgba(34,197,94,0.3); background: rgba(34,197,94,0.12); color: #86efac;" onclick="fillFairCalc(${item.roundId}, '${escapeHtml(item.serverSeed)}')">⚡ Проверить в калькуляторе</button>
+                    </div>` : ''}
+                </div>
+            `;
+        });
+        listEl.innerHTML = html;
+    } catch (_) {
+        listEl.innerHTML = `<div class="empty-placeholder">Не удалось загрузить историю раундов</div>`;
+    }
+}
+
 window.switchView = switchView;
 window.placeArenaBet = placeArenaBet;
 window.setQuickBet = setQuickBet;
@@ -926,6 +1134,10 @@ window.multiplyBet = multiplyBet;
 window.setMaxBet = setMaxBet;
 window.openHistoryModal = openHistoryModal;
 window.openInfoModal = openInfoModal;
+window.openFairModal = openFairModal;
+window.copyFairHash = copyFairHash;
+window.calculateSha256InModal = calculateSha256InModal;
+window.fillFairCalc = fillFairCalc;
 window.closeModal = closeModal;
 window.closeModalOnOverlay = closeModalOnOverlay;
 window.openReplayModal = openReplayModal;

@@ -1,16 +1,13 @@
 import os
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-env_file = os.path.join(BASE_DIR, ".env")
-
 try:
     from dotenv import load_dotenv
-    load_dotenv(env_file)
+    load_dotenv()
 except ImportError:
     # Built-in lightweight .env parser if python-dotenv is not yet installed
-    if os.path.exists(env_file):
+    if os.path.exists(".env"):
         try:
-            with open(env_file, "r", encoding="utf-8") as f:
+            with open(".env", "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith("#") and "=" in line:

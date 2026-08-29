@@ -3,6 +3,7 @@ import random
 import secrets
 import time
 import json
+import hashlib
 import urllib.parse
 from datetime import datetime, timezone, timedelta
 MSK_TZ = timezone(timedelta(hours=3))
@@ -47,9 +48,16 @@ class ArenaEngine:
                 players_json TEXT,
                 zones_json TEXT,
                 ball_trajectory_json TEXT,
+                round_hash TEXT,
+                server_seed TEXT,
                 created_at TEXT
             )
             ''')
+            try:
+                cursor.execute('ALTER TABLE arena_history ADD COLUMN IF NOT EXISTS round_hash TEXT')
+                cursor.execute('ALTER TABLE arena_history ADD COLUMN IF NOT EXISTS server_seed TEXT')
+            except Exception:
+                pass
             conn.commit()
     def get_max_round_id(self):
         try:
@@ -68,7 +76,10 @@ class ArenaEngine:
                 cursor.execute('''
                 SELECT round_id, total_bank, winner_id, winner_name, winner_username,
                        winner_avatar, winner_color, winner_bet, winner_share,
-                       players_json, zones_json, ball_trajectory_json, created_at
+                       players_json, zones_json, ball_trajectory_json,
+                       COALESCE(round_hash, '') as round_hash,
+                       COALESCE(server_seed, '') as server_seed,
+                       created_at
                 FROM arena_history
                 ORDER BY round_id DESC
                 LIMIT ?
@@ -90,6 +101,8 @@ class ArenaEngine:
                         "players": json.loads(r["players_json"]) if r["players_json"] else [],
                         "zones": json.loads(r["zones_json"]) if r["zones_json"] else [],
                         "ballTrajectory": json.loads(r["ball_trajectory_json"]) if r["ball_trajectory_json"] else {},
+                        "roundHash": r.get("round_hash", ""),
+                        "serverSeed": r.get("server_seed", ""),
                         "createdAt": r["created_at"]
                     })
         except Exception:
@@ -106,8 +119,12 @@ class ArenaEngine:
     def create_new_round(self):
         now = datetime.now(MSK_TZ)
         self.round_counter += 1
+        server_seed = secrets.token_hex(32)
+        round_hash = hashlib.sha256(f"{self.round_counter}:{server_seed}".encode('utf-8')).hexdigest()
         self.current_round = {
             "id": self.round_counter,
+            "server_seed": server_seed,
+            "round_hash": round_hash,
             "status": "waiting",  
             "createdAt": now.isoformat(),
             "createdAtStr": now.strftime("%d-%m-%Y %H:%M:%S"),
@@ -497,8 +514,9 @@ class ArenaEngine:
                 INSERT INTO arena_history (
                     round_id, total_bank, winner_id, winner_name, winner_username,
                     winner_avatar, winner_color, winner_bet, winner_share,
-                    players_json, zones_json, ball_trajectory_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    players_json, zones_json, ball_trajectory_json,
+                    round_hash, server_seed, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (round_id) DO UPDATE SET
                     total_bank = EXCLUDED.total_bank,
                     winner_id = EXCLUDED.winner_id,
@@ -511,6 +529,8 @@ class ArenaEngine:
                     players_json = EXCLUDED.players_json,
                     zones_json = EXCLUDED.zones_json,
                     ball_trajectory_json = EXCLUDED.ball_trajectory_json,
+                    round_hash = EXCLUDED.round_hash,
+                    server_seed = EXCLUDED.server_seed,
                     created_at = EXCLUDED.created_at
                 ''', (
                     round_id,
@@ -525,6 +545,8 @@ class ArenaEngine:
                     json.dumps(round_data["players"], ensure_ascii=False),
                     json.dumps(round_data["zones"], ensure_ascii=False),
                     json.dumps(round_data.get("ballTrajectory", {}), ensure_ascii=False),
+                    round_data.get("round_hash", ""),
+                    round_data.get("server_seed", ""),
                     round_data["createdAtStr"]
                 ))
                 conn.commit()
@@ -537,6 +559,8 @@ class ArenaEngine:
             "players": round_data["players"],
             "zones": round_data["zones"],
             "ballTrajectory": round_data.get("ballTrajectory"),
+            "roundHash": round_data.get("round_hash", ""),
+            "serverSeed": round_data.get("server_seed", ""),
             "createdAt": round_data["createdAtStr"]
         }
         self.history.insert(0, history_item)
@@ -554,6 +578,7 @@ class ArenaEngine:
             time_left = max(0, int(r.get("ballDuration", 9.0) - (now - r["statusStartedAt"])))
         return {
             "id": r["id"],
+            "roundHash": r.get("round_hash", ""),
             "status": r["status"],
             "totalBank": r["totalBank"],
             "onlineCount": self.get_online_count(),

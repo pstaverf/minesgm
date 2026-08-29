@@ -7,6 +7,7 @@ import json
 import html
 import math
 import urllib.parse
+from typing import Optional
 from arena_engine import arena_engine
 from asset_rotator import asset_rotator
 from datetime import datetime, timedelta, timezone
@@ -14289,7 +14290,10 @@ async def handle_api_arena_replay(request: web.Request):
                 cursor.execute('''
                 SELECT round_id, total_bank, winner_id, winner_name, winner_username,
                        winner_avatar, winner_color, winner_bet, winner_share,
-                       players_json, zones_json, ball_trajectory_json, created_at
+                       players_json, zones_json, ball_trajectory_json,
+                       COALESCE(round_hash, '') as round_hash,
+                       COALESCE(server_seed, '') as server_seed,
+                       created_at
                 FROM arena_history WHERE round_id = ?
                 ''', (round_id,))
                 r = cursor.fetchone()
@@ -14309,6 +14313,8 @@ async def handle_api_arena_replay(request: web.Request):
                         "players": json.loads(r["players_json"]) if r["players_json"] else [],
                         "zones": json.loads(r["zones_json"]) if r["zones_json"] else [],
                         "ballTrajectory": json.loads(r["ball_trajectory_json"]) if r["ball_trajectory_json"] else {},
+                        "roundHash": r.get("round_hash", "") if hasattr(r, "get") else (r["round_hash"] if "round_hash" in r.keys() else ""),
+                        "serverSeed": r.get("server_seed", "") if hasattr(r, "get") else (r["server_seed"] if "server_seed" in r.keys() else ""),
                         "createdAt": r["created_at"]
                     }
         except Exception:
