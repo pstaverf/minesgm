@@ -1165,59 +1165,72 @@ async function loadTasks() {
     }
 }
 
+function generateTaskCardHtml(task) {
+    const status = activeTasksStatus[task.id] || 0;
+    
+    let btnContent = "";
+    let btnClass = "earn-btn";
+    let extraStyle = "";
+    
+    if (status === 0) {
+        btnContent = `<span>Перейти</span>`;
+    } else if (status === 9) {
+        btnClass += " reward-loading";
+        extraStyle = "pointer-events: none;";
+        btnContent = `<span class="eos-icons--loading"></span>`;
+    } else if (status === 1) {
+        btnClass += " reward-complete-btn";
+        btnContent = `<svg xmlns="http://www.w3.org/2000/svg" color="#090909" fill="none" height="18px" viewBox="0 0 24 24" stroke-width="3" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg>`;
+    } else if (status === 2) {
+        btnClass += " reward-fine-btn";
+        btnContent = `<svg xmlns="http://www.w3.org/2000/svg" color="#ffffff" fill="none" height="18px" viewBox="0 0 24 24" stroke-width="3" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>`;
+    }
+
+    const rewardClass = status === 1 ? "reward-complete" : (status === 2 ? "reward-fine" : "");
+    const titleText = task.subtitle ? `${escapeHtml(task.title)} (${escapeHtml(task.subtitle)})` : escapeHtml(task.title);
+
+    return `
+        <div class="earn-component-container" id="task-card-${escapeHtml(task.id)}">
+            <div class="task-icon sponsor">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="#38bdf8">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10s10-4.48 10-10S17.52 2 12 2m4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19c-.14.75-.42 1-.68 1.03c-.58.05-1.02-.38-1.58-.75c-.88-.58-1.38-.94-2.23-1.5c-.99-.65-.35-1.01.22-1.59c.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02c-.09.02-1.49.95-4.22 2.79c-.4.27-.76.41-1.08.4c-.36-.01-1.04-.2-1.55-.37c-.63-.2-1.12-.31-1.08-.66c.02-.18.27-.36.75-.55c2.92-1.27 4.86-2.11 5.83-2.51c2.78-1.16 3.35-1.36 3.73-1.36c.08 0 .27.02.39.12c.1.08.13.19.14.27c-.01.06.01.24 0 .38"/>
+                </svg>
+            </div>
+            <div class="task-item-info">
+                <span class="name">${titleText}</span>
+                <span class="reward ${rewardClass}">+${task.reward} ${escapeHtml(task.currency || 'MP')}</span>
+            </div>
+            <button type="button" class="${btnClass}" style="${extraStyle}" onclick="executeTask('${escapeHtml(task.id)}', '${escapeHtml(task.url)}')">
+                ${btnContent}
+            </button>
+        </div>
+    `;
+}
+
 function renderTasksList(tasks) {
-    const listEl = document.getElementById("tasks-sponsor-list");
-    if (!listEl) return;
+    const sponsorListEl = document.getElementById("tasks-sponsor-list");
+    const playerListEl = document.getElementById("tasks-player-list");
     
     const visibleTasks = (tasks || []).filter(task => !task.is_completed && activeTasksStatus[task.id] !== "deleted");
     
-    if (visibleTasks.length === 0) {
-        listEl.innerHTML = `<div class="tasks-empty-banner">Нет доступных заданий</div>`;
-        return;
+    const sponsorTasks = visibleTasks.filter(t => t.is_sponsor);
+    const playerTasks = visibleTasks.filter(t => !t.is_sponsor);
+    
+    if (sponsorListEl) {
+        if (sponsorTasks.length === 0) {
+            sponsorListEl.innerHTML = `<div class="tasks-empty-banner">Спонсорские задания выполнены</div>`;
+        } else {
+            sponsorListEl.innerHTML = sponsorTasks.map(generateTaskCardHtml).join("");
+        }
     }
     
-    let html = "";
-    visibleTasks.forEach(task => {
-        const status = activeTasksStatus[task.id] || 0;
-        
-        let btnContent = "";
-        let btnClass = "earn-btn";
-        let extraStyle = "";
-        
-        if (status === 0) {
-            btnContent = `<span>Перейти</span>`;
-        } else if (status === 9) {
-            btnClass += " reward-loading";
-            extraStyle = "pointer-events: none;";
-            btnContent = `<span class="eos-icons--loading"></span>`;
-        } else if (status === 1) {
-            btnClass += " reward-complete-btn";
-            btnContent = `<svg xmlns="http://www.w3.org/2000/svg" color="#090909" fill="none" height="18px" viewBox="0 0 24 24" stroke-width="3" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg>`;
-        } else if (status === 2) {
-            btnClass += " reward-fine-btn";
-            btnContent = `<svg xmlns="http://www.w3.org/2000/svg" color="#ffffff" fill="none" height="18px" viewBox="0 0 24 24" stroke-width="3" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>`;
+    if (playerListEl) {
+        if (playerTasks.length === 0) {
+            playerListEl.innerHTML = `<div class="tasks-empty-banner">Заданий от игроков пока нет</div>`;
+        } else {
+            playerListEl.innerHTML = playerTasks.map(generateTaskCardHtml).join("");
         }
-
-        const rewardClass = status === 1 ? "reward-complete" : (status === 2 ? "reward-fine" : "");
-
-        html += `
-            <div class="earn-component-container" id="task-card-${escapeHtml(task.id)}">
-                <div class="task-icon sponsor">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="#38bdf8">
-                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10s10-4.48 10-10S17.52 2 12 2m4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19c-.14.75-.42 1-.68 1.03c-.58.05-1.02-.38-1.58-.75c-.88-.58-1.38-.94-2.23-1.5c-.99-.65-.35-1.01.22-1.59c.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02c-.09.02-1.49.95-4.22 2.79c-.4.27-.76.41-1.08.4c-.36-.01-1.04-.2-1.55-.37c-.63-.2-1.12-.31-1.08-.66c.02-.18.27-.36.75-.55c2.92-1.27 4.86-2.11 5.83-2.51c2.78-1.16 3.35-1.36 3.73-1.36c.08 0 .27.02.39.12c.1.08.13.19.14.27c-.01.06.01.24 0 .38"/>
-                    </svg>
-                </div>
-                <div class="task-item-info">
-                    <span class="name">${escapeHtml(task.title)}</span>
-                    <span class="reward ${rewardClass}">+${task.reward} ${escapeHtml(task.currency || 'MP')}</span>
-                </div>
-                <button type="button" class="${btnClass}" style="${extraStyle}" onclick="executeTask('${escapeHtml(task.id)}', '${escapeHtml(task.url)}')">
-                    ${btnContent}
-                </button>
-            </div>
-        `;
-    });
-    listEl.innerHTML = html;
+    }
 }
 
 async function executeTask(taskId, url) {

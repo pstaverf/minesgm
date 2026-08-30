@@ -15146,10 +15146,21 @@ async def process_chat_shared(message: types.Message):
             if chat_obj:
                 real_chat_id = cid
                 chat_title = chat_obj.title or chat_title
-                chat_username = chat_obj.username or ""
+                chat_username = (chat_obj.username or "").strip().lstrip("@")
                 break
         except Exception:
             pass
+
+    if not chat_username:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« В меню продвижения", callback_data="promote_menu", style="primary")]])
+        await message.answer(
+            "<tg-emoji emoji-id=\"5447644880824181073\">⚠️</tg-emoji> <b>Ошибка:</b> <i>Канал/чат должен быть публичным (иметь ссылку @username)!</i>\n\n"
+            "<blockquote>Приватные каналы не поддерживаются. Установите публичный юзернейм в настройках канала и попробуйте снова. MPOINT не были списаны.</blockquote>",
+            reply_markup=ReplyKeyboardRemove(),
+            parse_mode=ParseMode.HTML
+        )
+        await message.answer("Управляйте заданиями в меню:", reply_markup=kb, parse_mode=ParseMode.HTML)
+        return
 
     # Deduct MP and save to DB
     now_iso = get_msk_now().isoformat()
