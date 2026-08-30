@@ -17,7 +17,11 @@ import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
+    KeyboardButtonRequestChat, ChatAdministratorRights
+)
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
@@ -58,6 +62,22 @@ try:
         task_id TEXT,
         completed_at TEXT,
         PRIMARY KEY (user_id, task_id)
+    )
+    """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS p2p_promotions (
+        id BIGSERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        chat_id BIGINT NOT NULL,
+        chat_title TEXT NOT NULL,
+        chat_username TEXT,
+        chat_type TEXT NOT NULL,
+        price_per_sub INT NOT NULL,
+        total_subs INT NOT NULL,
+        completed_subs INT DEFAULT 0,
+        total_spent INT NOT NULL,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TEXT NOT NULL
     )
     """)
     cursor.execute("UPDATE users SET max_balance = balance WHERE max_balance IS NULL OR max_balance < balance")
@@ -4222,7 +4242,7 @@ async def process_darts_outcome(message: types.Message, dice_msg: types.Message,
 
     # Win condition
     is_win = False
-    if target_choice_code == "red" and val in [2, 4]:
+    if target_choice_code == "red" and val in [2, 4, 6]:
         is_win = True
     elif target_choice_code == "white" and val in [3, 5]:
         is_win = True
@@ -13697,6 +13717,8 @@ async def cb_sexch_set_interval(callback: types.CallbackQuery):
     ))
 ))
 async def process_p2p_and_admin_reply_message(message: types.Message):
+    if message.chat.type != "private":
+        return
     user_id = message.from_user.id
     raw_text = message.text.strip()
     rep_text = (message.reply_to_message.text or message.reply_to_message.caption or "") if message.reply_to_message else ""
@@ -14664,6 +14686,562 @@ async def p2p_rate_updater_task():
         await asyncio.sleep(30)
 
 
+# --- P2P PROMOTIONS (/promote, продвижение) ---
+
+promote_user_states = {}
+# State: { "target_type": "channel"|"chat", "step": "price"|"subs"|"wait_chat", "price": 1, "subs": 1, "msg_ids": [] }
+
+
+def get_promote_main_markup():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Продвигать канал",
+                    callback_data="promote_type_channel",
+                    style="primary",
+                    icon_custom_emoji_id="5469903029144657419"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Продвигать чат/группу",
+                    callback_data="promote_type_chat",
+                    style="primary",
+                    icon_custom_emoji_id="5465300082628763143"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Активные",
+                    callback_data="promote_active",
+                    style="success",
+                    icon_custom_emoji_id="5809949600152296075"
+                ),
+                InlineKeyboardButton(
+                    text="Завершенные",
+                    callback_data="promote_completed",
+                    style="danger",
+                    icon_custom_emoji_id="5953810354365538566"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Правила",
+                    callback_data="promote_rules",
+                    style="danger",
+                    icon_custom_emoji_id="5222444124698853913"
+                )
+            ]
+        ]
+    )
+
+
+async def send_promote_main_menu(chat_id: int, user_id: int, user_first_name: str, message_to_edit: types.Message = None):
+    user = get_user(user_id)
+    mp_bal = user.get("mp_balance", 0) if user else 0
+    user_link = get_user_mention(user_id, user_first_name)
+
+    text = (
+        f'<tg-emoji emoji-id="5341715473882955310">⚙️</tg-emoji> {user_link}, <i>что ты хочешь рекламировать?</i>\n'
+        f'----------------------\n'
+        f'<tg-emoji emoji-id="5447644880824181073">⚠️</tg-emoji><b>Обязательно прочитай правила перед добавляем задания!</b>\n'
+        f'----------------------\n'
+        f'<tg-emoji emoji-id="5307594157739515229">💎</tg-emoji> Баланс: <b>{format_number(mp_bal)} MPOINT</b>'
+    )
+    kb = get_promote_main_markup()
+
+    if message_to_edit:
+        try:
+            await message_to_edit.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+            return
+        except Exception:
+            pass
+    await bot.send_message(chat_id, text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+
+@dp.message(Command("promote", "продвижение"))
+@dp.message(lambda message: message.text and message.text.strip().lower() in ["продвижение", "/promote", "promote", "/продвижение"])
+async def cmd_promote(message: types.Message):
+    if message.chat.type != "private":
+        return
+    user_id = message.from_user.id
+    promote_user_states.pop(user_id, None)
+    await send_promote_main_menu(message.chat.id, user_id, message.from_user.first_name)
+
+
+@dp.callback_query(lambda c: c.data == "promote_menu")
+async def process_promote_menu(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    promote_user_states.pop(user_id, None)
+    await send_promote_main_menu(callback.message.chat.id, user_id, callback.from_user.first_name, message_to_edit=callback.message)
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data in ["promote_type_channel", "promote_type_chat"])
+async def process_promote_type(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    target_type = "channel" if callback.data == "promote_type_channel" else "chat"
+    promote_user_states[user_id] = {
+        "target_type": target_type,
+        "step": "price"
+    }
+
+    user_link = get_user_mention(user_id, callback.from_user.first_name)
+    text = (
+        f'<tg-emoji emoji-id="5373012449597335010">👤</tg-emoji> <i>{user_link}, напиши цену за 1 подписчика!\n'
+        f'----------------------\n'
+        f'<tg-emoji emoji-id="5447644880824181073">⚠️</tg-emoji> Минимальная цена - 1 MPOINT!</i>\n'
+        f'<blockquote>🔝 <b>Чем выше цена за подписчика — тем выше будет в списке твое задание!</b></blockquote>'
+    )
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="1 MP", callback_data="promote_price_1", style="primary"),
+                InlineKeyboardButton(text="3 MP", callback_data="promote_price_3", style="primary"),
+                InlineKeyboardButton(text="5 MP", callback_data="promote_price_5", style="primary"),
+            ],
+            [
+                InlineKeyboardButton(text="« Назад", callback_data="promote_menu")
+            ]
+        ]
+    )
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("promote_price_"))
+async def process_promote_price_choice(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    state_data = promote_user_states.get(user_id, {})
+    try:
+        price = int(callback.data.replace("promote_price_", ""))
+    except Exception:
+        price = 1
+
+    await handle_promote_price_selected(callback.message.chat.id, user_id, callback.from_user.first_name, price, message_to_edit=callback.message)
+    await callback.answer()
+
+
+async def handle_promote_price_selected(chat_id: int, user_id: int, first_name: str, price: int, message_to_edit: types.Message = None):
+    if price < 1:
+        price = 1
+
+    state_data = promote_user_states.get(user_id, {})
+    state_data["price"] = price
+    state_data["step"] = "subs"
+    promote_user_states[user_id] = state_data
+
+    user = get_user(user_id)
+    mp_balance = user.get("mp_balance", 0) if user else 0
+    max_subs = int(mp_balance // price) if price > 0 else 0
+
+    user_link = get_user_mention(user_id, first_name)
+
+    if max_subs < 1:
+        text = (
+            f'{user_link}, <i>у вас недостаточно MPOINT на балансе!\n'
+            f'Баланс: <b>{format_number(mp_balance)} MP</b>. Для цены {price} MP требуется минимум {price} MP.</i>'
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« Назад", callback_data="promote_type_channel" if state_data.get("target_type") == "channel" else "promote_type_chat")]])
+        if message_to_edit:
+            try:
+                await message_to_edit.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+                return
+            except Exception:
+                pass
+        await bot.send_message(chat_id, text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        return
+
+    text = (
+        f'<tg-emoji emoji-id="5472355270787079946">🧮</tg-emoji> <i>{user_link}, введи количество подписчиков:\n'
+        f'---------------\n'
+        f'🔘 <b>Максимум:</b> {format_number(max_subs)} чел.</i>'
+    )
+
+    row1 = []
+    for count_opt in [1, 5, 10]:
+        if count_opt <= max_subs:
+            row1.append(InlineKeyboardButton(text=f"{count_opt} чел.", callback_data=f"promote_subs_{count_opt}", style="primary"))
+
+    kb_rows = []
+    if row1:
+        kb_rows.append(row1)
+    kb_rows.append([InlineKeyboardButton(text=f"Макс • {format_number(max_subs)} чел.", callback_data=f"promote_subs_{max_subs}", style="primary")])
+    kb_rows.append([InlineKeyboardButton(text="« Назад", callback_data="promote_type_channel" if state_data.get("target_type") == "channel" else "promote_type_chat")])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+    if message_to_edit:
+        try:
+            await message_to_edit.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+            return
+        except Exception:
+            pass
+    await bot.send_message(chat_id, text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("promote_subs_"))
+async def process_promote_subs_choice(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    try:
+        count = int(callback.data.replace("promote_subs_", ""))
+    except Exception:
+        count = 1
+
+    await handle_promote_subs_selected(callback.message.chat.id, user_id, callback.from_user.first_name, count, message_to_edit=callback.message)
+    await callback.answer()
+
+
+async def handle_promote_subs_selected(chat_id: int, user_id: int, first_name: str, count: int, message_to_edit: types.Message = None):
+    state_data = promote_user_states.get(user_id, {})
+    price = state_data.get("price", 1)
+
+    user = get_user(user_id)
+    mp_balance = user.get("mp_balance", 0) if user else 0
+    max_subs = int(mp_balance // price) if price > 0 else 0
+
+    if count < 1:
+        count = 1
+    if count > max_subs:
+        count = max_subs
+
+    state_data["subs"] = count
+    state_data["step"] = "wait_chat"
+    promote_user_states[user_id] = state_data
+
+    target_type = state_data.get("target_type", "channel")
+    is_channel = (target_type == "channel")
+    btn_text = "Отправить канал" if is_channel else "Отправить чат"
+
+    # Message 1
+    text1 = (
+        '<tg-emoji emoji-id="5274099962655816924">❗️</tg-emoji> ВАЖНО <tg-emoji emoji-id="5274099962655816924">❗️</tg-emoji>\n'
+        '<blockquote>Канал/чат не должен нарушать правила Telegram. В случае нарушения мы ограничим доступ к боту навсегда.</blockquote>\n'
+        f'<i>{"Канал" if is_channel else "Чат"} должен быть публичным и без заявок на вступление</i>'
+    )
+    msg1 = await bot.send_message(chat_id, text1, parse_mode=ParseMode.HTML)
+
+    # Message 2 with cancel inline button and reply keyboard for chat_shared
+    text2 = '<i>⛓💥"Хотите отменить добавление? Если нет, выберите кнопку на клавиатуре.👇</i>'
+    kb_cancel = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="promote_cancel", style="danger")]])
+
+    reply_kb = ReplyKeyboardMarkup(
+        keyboard=[[
+            KeyboardButton(
+                text=btn_text,
+                request_chat=KeyboardButtonRequestChat(
+                    request_id=1001,
+                    chat_is_channel=is_channel,
+                    user_administrator_rights=ChatAdministratorRights(
+                        is_anonymous=False,
+                        can_manage_chat=True,
+                        can_delete_messages=True,
+                        can_manage_video_chats=True,
+                        can_restrict_members=True,
+                        can_promote_members=True,
+                        can_change_info=True,
+                        can_invite_users=True,
+                        can_post_messages=True,
+                        can_edit_messages=True,
+                        can_pin_messages=True,
+                        can_manage_topics=False
+                    )
+                )
+            )
+        ]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
+    msg2 = await bot.send_message(chat_id, text2, reply_markup=kb_cancel, parse_mode=ParseMode.HTML)
+    await bot.send_message(chat_id, "👇 Нажмите кнопку внизу:", reply_markup=reply_kb)
+
+    state_data["msg_ids"] = [msg1.message_id, msg2.message_id]
+    promote_user_states[user_id] = state_data
+
+
+@dp.callback_query(lambda c: c.data == "promote_cancel")
+async def process_promote_cancel(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    state_data = promote_user_states.pop(user_id, None)
+    if state_data and "msg_ids" in state_data:
+        for mid in state_data["msg_ids"]:
+            try:
+                await bot.delete_message(callback.message.chat.id, mid)
+            except Exception:
+                pass
+
+    rm_msg = await callback.message.answer("❌ <i>Добавление задания отменено.</i>", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+    try:
+        await asyncio.sleep(1)
+        await rm_msg.delete()
+    except Exception:
+        pass
+
+    await send_promote_main_menu(callback.message.chat.id, user_id, callback.from_user.first_name)
+    await callback.answer()
+
+
+@dp.message(lambda message: message.chat_shared is not None)
+async def process_chat_shared(message: types.Message):
+    if message.chat.type != "private":
+        return
+    user_id = message.from_user.id
+    state_data = promote_user_states.pop(user_id, None)
+    if not state_data or state_data.get("step") != "wait_chat":
+        await message.reply("<i>Сессия добавления задания истекла. Введите /promote заново.</i>", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+        return
+
+    # Delete instruction messages
+    if "msg_ids" in state_data:
+        for mid in state_data["msg_ids"]:
+            try:
+                await bot.delete_message(message.chat.id, mid)
+            except Exception:
+                pass
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    chat_id = message.chat_shared.chat_id
+    target_type = state_data.get("target_type", "channel")
+    price = state_data.get("price", 1)
+    subs = state_data.get("subs", 1)
+    total_cost = price * subs
+
+    user = get_user(user_id)
+    mp_balance = user.get("mp_balance", 0) if user else 0
+
+    if mp_balance < total_cost:
+        await message.answer(f"<i>Недостаточно MPOINT! Требуется {total_cost} MP, у вас {mp_balance} MP.</i>", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+        return
+
+    # Resolve real chat ID and fetch chat info from Telegram
+    real_chat_id = chat_id
+    chat_title = "Канал" if target_type == "channel" else "Чат"
+    chat_username = ""
+    candidates = [real_chat_id]
+    if isinstance(real_chat_id, int) and real_chat_id > 0:
+        try:
+            candidates.append(int(f"-100{real_chat_id}"))
+        except Exception:
+            pass
+
+    for cid in candidates:
+        try:
+            chat_obj = await bot.get_chat(cid)
+            if chat_obj:
+                real_chat_id = cid
+                chat_title = chat_obj.title or chat_title
+                chat_username = chat_obj.username or ""
+                break
+        except Exception:
+            pass
+
+    # Deduct MP and save to DB
+    now_iso = get_msk_now().isoformat()
+    try:
+        cursor.execute("UPDATE users SET mp_balance = COALESCE(mp_balance, 0) - ? WHERE user_id = ?", (total_cost, user_id))
+        cursor.execute("""
+            INSERT INTO p2p_promotions (user_id, chat_id, chat_title, chat_username, chat_type, price_per_sub, total_subs, completed_subs, total_spent, is_active, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, TRUE, ?)
+        """, (user_id, real_chat_id, chat_title, chat_username, target_type, price, subs, total_cost, now_iso))
+        conn.commit()
+    except Exception as e:
+        logging.error(f"Failed to insert p2p_promotion: {e}")
+        await message.answer("<i>Произошла ошибка при сохранении задания. Попробуйте снова.</i>", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+        return
+
+    first_name = message.from_user.first_name or "Игрок"
+    target_ru = "канал" if target_type == "channel" else "чат"
+    succ_text = (
+        f'<tg-emoji emoji-id="5427009714745517609">✅</tg-emoji><i>{first_name}, твой {target_ru} успешно добавлен!</i>'
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« В меню продвижения", callback_data="promote_menu", style="primary")]])
+    await message.answer(succ_text, reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+    await message.answer("Управляйте заданиями в меню:", reply_markup=kb, parse_mode=ParseMode.HTML)
+
+
+@dp.callback_query(lambda c: c.data == "promote_active")
+async def process_promote_active(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    user_link = get_user_mention(user_id, callback.from_user.first_name)
+
+    try:
+        cursor.execute("""
+            SELECT id, chat_title, chat_type, price_per_sub, total_subs, completed_subs, is_active
+            FROM p2p_promotions
+            WHERE user_id = ? AND completed_subs < total_subs
+            ORDER BY id DESC
+        """, (user_id,))
+        rows = cursor.fetchall()
+    except Exception as e:
+        logging.error(f"Error fetching active promotions: {e}")
+        rows = []
+
+    text = (
+        f'🌀 <i>{user_link}, здесь можно включить и выключить задачи!</i>\n'
+        f'----------------------\n'
+        f'🟢 - вкл. / ⭕️ - выкл. / ❌ - удалить.\n\n'
+        f'<blockquote>ℹ️ Стикер показывают статус задания | название вашего канала/чата/поста | заданная цель / сделанная задача. Если вы удалите задание остаток MP будует возвращен на баланс.</blockquote>'
+    )
+
+    kb_rows = []
+    if rows:
+        for r in rows:
+            p_id, p_title, p_type, p_price, p_total, p_done, p_active = r
+            icon = "🟢" if p_active else "⭕️"
+            short_title = p_title[:16] + ("..." if len(p_title) > 16 else "")
+            btn_label = f"{icon} {short_title} | {p_done}/{p_total}"
+            kb_rows.append([
+                InlineKeyboardButton(text=btn_label, callback_data=f"promote_toggle_{p_id}", style="primary"),
+                InlineKeyboardButton(text="❌", callback_data=f"promote_del_{p_id}", style="danger")
+            ])
+    else:
+        text += "\n\n<blockquote><i>У вас пока нет активных заданий.</i></blockquote>"
+
+    kb_rows.append([InlineKeyboardButton(text="« Назад", callback_data="promote_menu")])
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("promote_toggle_"))
+async def process_promote_toggle(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    try:
+        p_id = int(callback.data.replace("promote_toggle_", ""))
+        cursor.execute("UPDATE p2p_promotions SET is_active = NOT is_active WHERE id = ? AND user_id = ?", (p_id, user_id))
+        conn.commit()
+    except Exception as e:
+        logging.error(f"Error toggling promotion: {e}")
+
+    await process_promote_active(callback)
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("promote_del_"))
+async def process_promote_delete(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    try:
+        p_id = int(callback.data.replace("promote_del_", ""))
+        cursor.execute("SELECT price_per_sub, total_subs, completed_subs FROM p2p_promotions WHERE id = ? AND user_id = ?", (p_id, user_id))
+        row = cursor.fetchone()
+        if row:
+            p_price, p_total, p_done = row
+            remaining = max(0, p_total - p_done)
+            refund_mp = remaining * p_price
+            cursor.execute("DELETE FROM p2p_promotions WHERE id = ? AND user_id = ?", (p_id, user_id))
+            if refund_mp > 0:
+                cursor.execute("UPDATE users SET mp_balance = COALESCE(mp_balance, 0) + ? WHERE user_id = ?", (refund_mp, user_id))
+            conn.commit()
+            await callback.answer(f"Задание удалено! Возвращено {refund_mp} MP.", show_alert=True)
+        else:
+            await callback.answer("Задание не найдено.", show_alert=True)
+    except Exception as e:
+        logging.error(f"Error deleting promotion: {e}")
+        await callback.answer("Ошибка при удалении задания.", show_alert=True)
+
+    await process_promote_active(callback)
+
+
+@dp.callback_query(lambda c: c.data == "promote_completed")
+async def process_promote_completed(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    user_link = get_user_mention(user_id, callback.from_user.first_name)
+
+    try:
+        cursor.execute("""
+            SELECT COUNT(*), COALESCE(SUM(completed_subs), 0)
+            FROM p2p_promotions
+            WHERE user_id = ?
+        """, (user_id,))
+        stats = cursor.fetchone()
+        count_tasks, completed_subs = stats if stats else (0, 0)
+    except Exception:
+        count_tasks, completed_subs = 0, 0
+
+    views = completed_subs * 3
+    subs = completed_subs
+    joins = completed_subs
+
+    text = (
+        f'<tg-emoji emoji-id="5312019687746349814">✅</tg-emoji><i> {user_link}, твои завершенные задачи:</i>\n'
+        f'----------------------\n'
+        f'👀 Показов: <b>{format_number(views)}</b>\n'
+        f'👥 Подписчиков: <b>{format_number(subs)}</b>\n'
+        f'👫 Вступлений: <b>{format_number(joins)}</b>\n'
+        f'----------------------\n'
+        f'<blockquote>ℹ️ Данная статистика показывает все задания, за все время.</blockquote>'
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« Назад", callback_data="promote_menu")]])
+
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data == "promote_rules")
+async def process_promote_rules(callback: types.CallbackQuery):
+    text = (
+        '<tg-emoji emoji-id="5447644880824181073">⚠️</tg-emoji> <b>Правила добавления заданий:</b>\n'
+        '----------------------\n'
+        '1. Канал или чат должен быть публичным и без обязательных заявок на вступление.\n'
+        '2. Запрещено рекламировать контент, нарушающий правила Telegram (мошенничество, спам, запрещенный контент).\n'
+        '3. При удалении активного задания остаток неиспользованных MPOINT моментально возвращается на ваш баланс.\n'
+        '4. Вы можете приостановить выполнение задания в любой момент в разделе «Активные».'
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« Назад", callback_data="promote_menu")]])
+
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await callback.answer()
+
+
+@dp.message(lambda message: message.text and message.from_user.id in promote_user_states)
+async def process_promote_text_input(message: types.Message):
+    if message.chat.type != "private":
+        return
+    user_id = message.from_user.id
+    state_data = promote_user_states.get(user_id)
+    if not state_data:
+        return
+
+    # If user types a slash command, clear state and let the command execute
+    if message.text.startswith("/"):
+        promote_user_states.pop(user_id, None)
+        return
+
+    step = state_data.get("step")
+    raw_val = parse_amount(message.text.strip())
+
+    if step == "price":
+        if raw_val is None or raw_val < 1:
+            await message.reply("<i>Минимальная цена — 1 MPOINT! Введите корректное число.</i>", parse_mode=ParseMode.HTML)
+            return
+        await handle_promote_price_selected(message.chat.id, user_id, message.from_user.first_name, int(raw_val))
+        return
+
+    if step == "subs":
+        if raw_val is None or raw_val < 1:
+            await message.reply("<i>Количество подписчиков должно быть от 1! Введите корректное число.</i>", parse_mode=ParseMode.HTML)
+            return
+        await handle_promote_subs_selected(message.chat.id, user_id, message.from_user.first_name, int(raw_val))
+        return
+
+
 # --- WEBAPP & ARENA HTTP API HANDLERS ---
 
 def parse_telegram_init_data(init_data: str, bot_token: str = ""):
@@ -14820,6 +15398,41 @@ async def handle_api_tasks(request: web.Request):
                 "is_sponsor": True
             })
 
+        # Fetch active P2P tasks
+        try:
+            cursor.execute("""
+                SELECT id, user_id, chat_id, chat_title, chat_username, chat_type, price_per_sub, total_subs, completed_subs
+                FROM p2p_promotions
+                WHERE is_active = TRUE AND completed_subs < total_subs
+                ORDER BY price_per_sub DESC, id DESC
+                LIMIT 50
+            """)
+            p2p_rows = cursor.fetchall()
+            for row in p2p_rows:
+                p_id, p_owner_id, p_chat_id, p_title, p_username, p_type, p_price, p_total, p_done = row
+                task_key = f"p2p_{p_id}"
+
+                is_done_by_user = False
+                if user_id:
+                    cursor.execute("SELECT 1 FROM user_completed_tasks WHERE user_id = ? AND task_id = ?", (user_id, task_key))
+                    if cursor.fetchone():
+                        is_done_by_user = True
+
+                if not is_done_by_user:
+                    url = f"https://t.me/{p_username}" if p_username else f"https://t.me/c/{str(p_chat_id).replace('-100', '')}"
+                    tasks.append({
+                        "id": task_key,
+                        "type": p_type,
+                        "title": "Подписка на канал" if p_type == "channel" else "Вступление в группу",
+                        "url": url,
+                        "reward": p_price,
+                        "currency": "MP",
+                        "is_completed": False,
+                        "is_sponsor": False
+                    })
+        except Exception as e:
+            logging.error(f"Error fetching P2P tasks for API: {e}")
+
         return web.json_response({
             "mp_balance": mp_balance,
             "tasks": tasks
@@ -14905,6 +15518,90 @@ async def handle_api_tasks_check(request: web.Request):
                 "currency": "MP",
                 "mp_balance": new_mp_balance,
                 "message": f"Поздравляем! Вам начислено {reward_mp} MP"
+            })
+
+        elif task_id.startswith("p2p_"):
+            try:
+                promo_id = int(task_id.replace("p2p_", ""))
+            except Exception:
+                return web.json_response({"error": "Неверный ID задания"}, status=400)
+
+            cursor.execute("""
+                SELECT id, user_id, chat_id, chat_username, chat_type, price_per_sub, total_subs, completed_subs, total_spent, is_active
+                FROM p2p_promotions
+                WHERE id = ?
+            """, (promo_id,))
+            promo = cursor.fetchone()
+            if not promo:
+                return web.json_response({"error": "Задание не найдено или было удалено"}, status=400)
+
+            p_id, creator_id, p_chat_id, p_username, p_type, p_price, p_total, p_done, p_spent, p_active = promo
+
+            if not p_active or p_done >= p_total:
+                return web.json_response({"error": "Задание уже завершено"}, status=400)
+
+            if user_id == creator_id:
+                return web.json_response({"error": "Вы не можете выполнять собственное задание!"}, status=400)
+
+            # Check subscription
+            is_subscribed = False
+            check_target = f"@{p_username}" if p_username else p_chat_id
+            try:
+                member = await bot.get_chat_member(chat_id=check_target, user_id=user_id)
+                status_str = str(getattr(member, "status", member) or "").lower()
+                logging.info(f"P2P Subscription check for {check_target} user_id={user_id}: status={status_str}")
+                if any(s in status_str for s in ("member", "administrator", "creator", "owner")):
+                    is_subscribed = True
+                elif getattr(member, "is_member", False):
+                    is_subscribed = True
+            except Exception as e:
+                logging.warning(f"Failed to check P2P subscription for {check_target} / {user_id}: {e}")
+
+            if not is_subscribed:
+                return web.json_response({
+                    "success": False,
+                    "error": f"Подписка не найдена. Подпишитесь на {check_target} и попробуйте снова!"
+                }, status=400)
+
+            now_iso = get_msk_now().isoformat()
+            new_completed = p_done + 1
+            is_now_finished = (new_completed >= p_total)
+            new_active = False if is_now_finished else p_active
+
+            try:
+                cursor.execute("INSERT INTO user_completed_tasks (user_id, task_id, completed_at) VALUES (?, ?, ?) ON CONFLICT (user_id, task_id) DO NOTHING", (user_id, task_id, now_iso))
+                cursor.execute("UPDATE users SET mp_balance = COALESCE(mp_balance, 0) + ? WHERE user_id = ?", (p_price, user_id))
+                cursor.execute("UPDATE p2p_promotions SET completed_subs = ?, is_active = ? WHERE id = ?", (new_completed, new_active, promo_id))
+                conn.commit()
+            except Exception as e:
+                logging.error(f"Failed to save P2P task completion: {e}")
+
+            # Notify creator if task finished
+            if is_now_finished:
+                try:
+                    chat_link = f"https://t.me/{p_username}" if p_username else f"ID: {p_chat_id}"
+                    fin_text = (
+                        f'<tg-emoji emoji-id="5427009714745517609">✅</tg-emoji><b>Твоё задание выполнено!</b>\n'
+                        f'-----------------\n'
+                        f'💰 Цена за подписчика: <b>{p_price} MPOINT</b>\n'
+                        f'〽️ Затраты: <b>{p_spent} MPOINT</b>\n'
+                        f'👥 <b>Вступивших: </b>{new_completed}\n'
+                        f'-----------------\n'
+                        f'🔰 Канал/Чат - {chat_link}'
+                    )
+                    asyncio.create_task(bot.send_message(creator_id, fin_text, parse_mode=ParseMode.HTML))
+                except Exception as e:
+                    logging.warning(f"Failed to send completion notification to creator {creator_id}: {e}")
+
+            user = get_user(user_id)
+            new_mp_balance = user.get("mp_balance", 0) if user else 0
+
+            return web.json_response({
+                "success": True,
+                "reward": p_price,
+                "currency": "MP",
+                "mp_balance": new_mp_balance,
+                "message": f"Поздравляем! Вам начислено {p_price} MP"
             })
         else:
             return web.json_response({"error": "Неизвестное задание"}, status=400)

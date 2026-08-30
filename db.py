@@ -254,6 +254,21 @@ CREATE TABLE IF NOT EXISTS user_completed_tasks (
     PRIMARY KEY (user_id, task_id)
 );
 
+CREATE TABLE IF NOT EXISTS p2p_promotions (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    chat_id BIGINT NOT NULL,
+    chat_title TEXT NOT NULL,
+    chat_username TEXT,
+    chat_type TEXT NOT NULL,
+    price_per_sub INT NOT NULL,
+    total_subs INT NOT NULL,
+    completed_subs INT DEFAULT 0,
+    total_spent INT NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS temple_user_stats (
     user_id BIGINT PRIMARY KEY,
     gifts_sent BIGINT DEFAULT 0,
