@@ -14807,19 +14807,18 @@ async def handle_api_tasks(request: web.Request):
             except Exception:
                 pass
 
-        tasks = [
-            {
+        tasks = []
+        if not is_completed:
+            tasks.append({
                 "id": "mines2gm",
                 "type": "channel",
-                "title": "Подписаться на @mines2gm",
-                "subtitle": "Официальный канал сообщества",
+                "title": "Подписка на канал",
                 "url": "https://t.me/mines2gm",
                 "reward": 1,
                 "currency": "MP",
-                "is_completed": is_completed,
+                "is_completed": False,
                 "is_sponsor": True
-            }
-        ]
+            })
 
         return web.json_response({
             "mp_balance": mp_balance,

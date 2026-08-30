@@ -1145,6 +1145,7 @@ async function renderFairHistory() {
 }
 
 let activeTasksStatus = {};
+let cachedTasksList = [];
 
 async function loadTasks() {
     try {
@@ -1155,6 +1156,7 @@ async function loadTasks() {
                 renderUserHeader();
             }
             if (Array.isArray(data.tasks)) {
+                cachedTasksList = data.tasks;
                 renderTasksList(data.tasks);
             }
         }
@@ -1167,9 +1169,16 @@ function renderTasksList(tasks) {
     const listEl = document.getElementById("tasks-sponsor-list");
     if (!listEl) return;
     
+    const visibleTasks = (tasks || []).filter(task => !task.is_completed && activeTasksStatus[task.id] !== "deleted");
+    
+    if (visibleTasks.length === 0) {
+        listEl.innerHTML = `<div class="tasks-empty-banner">Нет доступных заданий</div>`;
+        return;
+    }
+    
     let html = "";
-    tasks.forEach(task => {
-        const status = task.is_completed ? 1 : (activeTasksStatus[task.id] || 0);
+    visibleTasks.forEach(task => {
+        const status = activeTasksStatus[task.id] || 0;
         
         let btnContent = "";
         let btnClass = "earn-btn";
@@ -1194,9 +1203,8 @@ function renderTasksList(tasks) {
         html += `
             <div class="earn-component-container" id="task-card-${escapeHtml(task.id)}">
                 <div class="task-icon sponsor">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M22 2L11 13" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="#38bdf8">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10s10-4.48 10-10S17.52 2 12 2m4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19c-.14.75-.42 1-.68 1.03c-.58.05-1.02-.38-1.58-.75c-.88-.58-1.38-.94-2.23-1.5c-.99-.65-.35-1.01.22-1.59c.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02c-.09.02-1.49.95-4.22 2.79c-.4.27-.76.41-1.08.4c-.36-.01-1.04-.2-1.55-.37c-.63-.2-1.12-.31-1.08-.66c.02-.18.27-.36.75-.55c2.92-1.27 4.86-2.11 5.83-2.51c2.78-1.16 3.35-1.36 3.73-1.36c.08 0 .27.02.39.12c.1.08.13.19.14.27c-.01.06.01.24 0 .38"/>
                     </svg>
                 </div>
                 <div class="task-item-info">
@@ -1217,7 +1225,7 @@ async function executeTask(taskId, url) {
     
     triggerHaptic("light");
     activeTasksStatus[taskId] = 9;
-    loadTasks();
+    renderTasksList(cachedTasksList);
 
     if (tg && typeof tg.openTelegramLink === "function" && url.includes("t.me")) {
         tg.openTelegramLink(url);
@@ -1232,31 +1240,38 @@ async function executeTask(taskId, url) {
             if (res && res.success) {
                 triggerHaptic("success");
                 activeTasksStatus[taskId] = 1;
-                showToast(res.message || "Задание выполнено!", "ok");
-                launchConfetti();
                 if (typeof res.mp_balance !== "undefined") {
                     state.user.mp_balance = Number(res.mp_balance);
                     renderUserHeader();
                 }
-                loadTasks();
+                renderTasksList(cachedTasksList);
+                // After 2 seconds, smoothly remove the task
+                setTimeout(() => {
+                    const card = document.getElementById(`task-card-${taskId}`);
+                    if (card) card.classList.add("task-removing");
+                    setTimeout(() => {
+                        activeTasksStatus[taskId] = "deleted";
+                        loadTasks();
+                    }, 400);
+                }, 2000);
             } else {
                 triggerHaptic("error");
                 activeTasksStatus[taskId] = 2;
                 showToast(res.error || "Подписка не найдена", "error");
-                loadTasks();
+                renderTasksList(cachedTasksList);
                 setTimeout(() => {
                     activeTasksStatus[taskId] = 0;
-                    loadTasks();
+                    renderTasksList(cachedTasksList);
                 }, 2500);
             }
         } catch (err) {
             triggerHaptic("error");
             activeTasksStatus[taskId] = 2;
             showToast(err.message || "Подписка не найдена", "error");
-            loadTasks();
+            renderTasksList(cachedTasksList);
             setTimeout(() => {
                 activeTasksStatus[taskId] = 0;
-                loadTasks();
+                renderTasksList(cachedTasksList);
             }, 2500);
         }
     }, 10000);
