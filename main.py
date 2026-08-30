@@ -15094,13 +15094,49 @@ async def process_promote_cancel(callback: types.CallbackQuery):
     await callback.answer()
 
 
+async def finalize_p2p_promotion_creation(message: types.Message, user_id: int, first_name: str, state_data: dict, real_chat_id: int, chat_title: str, chat_username: str):
+    target_type = state_data.get("target_type", "channel")
+    price = state_data.get("price", 1)
+    subs = state_data.get("subs", 1)
+    total_cost = price * subs
+
+    user = get_user(user_id)
+    mp_balance = user.get("mp_balance", 0) if user else 0
+
+    if mp_balance < total_cost:
+        await message.answer(f"<i>Недостаточно MPOINT! Требуется {total_cost} MP, у вас {mp_balance} MP.</i>", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+        return
+
+    now_iso = get_msk_now().isoformat()
+    clean_username = (chat_username or "").strip().lstrip("@")
+    try:
+        cursor.execute("UPDATE users SET mp_balance = COALESCE(mp_balance, 0) - ? WHERE user_id = ?", (total_cost, user_id))
+        cursor.execute("""
+            INSERT INTO p2p_promotions (user_id, chat_id, chat_title, chat_username, chat_type, price_per_sub, total_subs, completed_subs, total_spent, is_active, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, TRUE, ?)
+        """, (user_id, real_chat_id, chat_title, clean_username, target_type, price, subs, total_cost, now_iso))
+        conn.commit()
+    except Exception as e:
+        logging.error(f"Failed to insert p2p_promotion: {e}")
+        await message.answer("<i>Произошла ошибка при сохранении задания. Попробуйте снова.</i>", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+        return
+
+    target_ru = "канал" if target_type == "channel" else "чат"
+    succ_text = (
+        f'<tg-emoji emoji-id="5427009714745517609">✅</tg-emoji><i>{first_name}, твой {target_ru} @{clean_username} успешно добавлен!</i>'
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« В меню продвижения", callback_data="promote_menu", style="primary")]])
+    await message.answer(succ_text, reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+    await message.answer("Управляйте заданиями в меню:", reply_markup=kb, parse_mode=ParseMode.HTML)
+
+
 @dp.message(lambda message: message.chat_shared is not None)
 async def process_chat_shared(message: types.Message):
     if message.chat.type != "private":
         return
     user_id = message.from_user.id
-    state_data = promote_user_states.pop(user_id, None)
-    if not state_data or state_data.get("step") != "wait_chat":
+    state_data = promote_user_states.get(user_id)
+    if not state_data or state_data.get("step") not in ["wait_chat", "wait_username"]:
         await message.reply("<i>Сессия добавления задания истекла. Введите /promote заново.</i>", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
         return
 
@@ -15118,16 +15154,6 @@ async def process_chat_shared(message: types.Message):
 
     chat_id = message.chat_shared.chat_id
     target_type = state_data.get("target_type", "channel")
-    price = state_data.get("price", 1)
-    subs = state_data.get("subs", 1)
-    total_cost = price * subs
-
-    user = get_user(user_id)
-    mp_balance = user.get("mp_balance", 0) if user else 0
-
-    if mp_balance < total_cost:
-        await message.answer(f"<i>Недостаточно MPOINT! Требуется {total_cost} MP, у вас {mp_balance} MP.</i>", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
-        return
 
     # Resolve real chat ID and fetch chat info from Telegram
     real_chat_id = chat_id
@@ -15143,8 +15169,8 @@ async def process_chat_shared(message: types.Message):
     for cid in candidates:
         try:
             chat_obj = await bot.get_chat(cid)
-            if chat_obj:
-                real_chat_id = cid
+            if chat_obj and chat_obj.username:
+                real_chat_id = chat_obj.id
                 chat_title = chat_obj.title or chat_title
                 chat_username = (chat_obj.username or "").strip().lstrip("@")
                 break
@@ -15152,38 +15178,20 @@ async def process_chat_shared(message: types.Message):
             pass
 
     if not chat_username:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« В меню продвижения", callback_data="promote_menu", style="primary")]])
+        # Prompt user for username
+        state_data["real_chat_id"] = real_chat_id
+        state_data["step"] = "wait_username"
+        promote_user_states[user_id] = state_data
         await message.answer(
-            "<tg-emoji emoji-id=\"5447644880824181073\">⚠️</tg-emoji> <b>Ошибка:</b> <i>Канал/чат должен быть публичным (иметь ссылку @username)!</i>\n\n"
-            "<blockquote>Приватные каналы не поддерживаются. Установите публичный юзернейм в настройках канала и попробуйте снова. MPOINT не были списаны.</blockquote>",
+            "<i>Канал получен! Пожалуйста, отправьте сюда @юзернейм или ссылку на канал (например: @channel или https://t.me/channel):</i>",
             reply_markup=ReplyKeyboardRemove(),
             parse_mode=ParseMode.HTML
         )
-        await message.answer("Управляйте заданиями в меню:", reply_markup=kb, parse_mode=ParseMode.HTML)
         return
 
-    # Deduct MP and save to DB
-    now_iso = get_msk_now().isoformat()
-    try:
-        cursor.execute("UPDATE users SET mp_balance = COALESCE(mp_balance, 0) - ? WHERE user_id = ?", (total_cost, user_id))
-        cursor.execute("""
-            INSERT INTO p2p_promotions (user_id, chat_id, chat_title, chat_username, chat_type, price_per_sub, total_subs, completed_subs, total_spent, is_active, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, TRUE, ?)
-        """, (user_id, real_chat_id, chat_title, chat_username, target_type, price, subs, total_cost, now_iso))
-        conn.commit()
-    except Exception as e:
-        logging.error(f"Failed to insert p2p_promotion: {e}")
-        await message.answer("<i>Произошла ошибка при сохранении задания. Попробуйте снова.</i>", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
-        return
-
+    promote_user_states.pop(user_id, None)
     first_name = message.from_user.first_name or "Игрок"
-    target_ru = "канал" if target_type == "channel" else "чат"
-    succ_text = (
-        f'<tg-emoji emoji-id="5427009714745517609">✅</tg-emoji><i>{first_name}, твой {target_ru} успешно добавлен!</i>'
-    )
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« В меню продвижения", callback_data="promote_menu", style="primary")]])
-    await message.answer(succ_text, reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
-    await message.answer("Управляйте заданиями в меню:", reply_markup=kb, parse_mode=ParseMode.HTML)
+    await finalize_p2p_promotion_creation(message, user_id, first_name, state_data, real_chat_id, chat_title, chat_username)
 
 
 @dp.callback_query(lambda c: c.data == "promote_active")
@@ -15344,6 +15352,40 @@ async def process_promote_text_input(message: types.Message):
         return
 
     step = state_data.get("step")
+
+    if step == "wait_chat" or step == "wait_username":
+        raw_text = message.text.strip()
+        uname = raw_text.replace("https://t.me/", "").replace("http://t.me/", "").replace("t.me/", "").replace("@", "").strip().split("/")[0].split("?")[0]
+        if not uname:
+            await message.reply("<i>Пожалуйста, укажите корректный юзернейм или ссылку (например: @channel или https://t.me/channel).</i>", parse_mode=ParseMode.HTML)
+            return
+
+        try:
+            chat_obj = await bot.get_chat(f"@{uname}")
+            if not chat_obj:
+                await message.reply(f"<i>Не удалось найти публичный канал/чат @{uname}. Убедитесь, что он существует.</i>", parse_mode=ParseMode.HTML)
+                return
+            real_chat_id = chat_obj.id
+            chat_title = chat_obj.title or uname
+            chat_username = chat_obj.username or uname
+        except Exception as e:
+            logging.warning(f"Failed to get_chat for @{uname}: {e}")
+            await message.reply(f"<i>Не удалось найти публичный канал/чат @{uname}. Проверьте правильность написания и убедитесь, что канал публичный.</i>", parse_mode=ParseMode.HTML)
+            return
+
+        # Delete service messages if present
+        if "msg_ids" in state_data:
+            for mid in state_data["msg_ids"]:
+                try:
+                    await bot.delete_message(message.chat.id, mid)
+                except Exception:
+                    pass
+
+        promote_user_states.pop(user_id, None)
+        first_name = message.from_user.first_name or "Игрок"
+        await finalize_p2p_promotion_creation(message, user_id, first_name, state_data, real_chat_id, chat_title, chat_username)
+        return
+
     raw_val = parse_amount(message.text.strip())
 
     if step == "price":
