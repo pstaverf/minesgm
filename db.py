@@ -247,6 +247,13 @@ CREATE TABLE IF NOT EXISTS arena_history (
     created_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS user_completed_tasks (
+    user_id BIGINT,
+    task_id TEXT,
+    completed_at TEXT,
+    PRIMARY KEY (user_id, task_id)
+);
+
 CREATE TABLE IF NOT EXISTS temple_user_stats (
     user_id BIGINT PRIMARY KEY,
     gifts_sent BIGINT DEFAULT 0,

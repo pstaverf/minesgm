@@ -177,10 +177,38 @@
         .profile-block { padding: 18px; border-radius: var(--radius-lg); border: 1px solid var(--border-card); background: var(--bg-card); }
         .profile-block h3 { font-size: 15px; font-weight: 800; margin-bottom: 8px; }
         .profile-info-text { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
-        .tabs { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(10px + var(--safe-bottom)); width: min(440px, calc(100vw - 24px)); padding: 6px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(18, 18, 22, 0.88); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6); display: grid; grid-template-columns: 1fr 1fr; gap: 6px; z-index: 50; }
+        .tabs { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(10px + var(--safe-bottom)); width: min(440px, calc(100vw - 24px)); padding: 6px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(18, 18, 22, 0.88); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6); display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; z-index: 50; }
         .tab-btn { display: flex; align-items: center; justify-content: center; gap: 8px; height: 48px; border-radius: 999px; border: none; background: transparent; color: var(--text-muted); font-family: inherit; font-size: 13px; font-weight: 800; cursor: pointer; transition: all 0.2s ease; }
         .tab-btn svg { width: 20px; height: 20px; }
         .tab-btn.active { background: rgba(255, 255, 255, 0.1); color: #ffffff; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1); }
+        
+        /* Tasks View Styling */
+        .tasks-summary-card { padding: 18px 20px; border-radius: var(--radius-lg); border: 1px solid rgba(59, 130, 246, 0.25); background: radial-gradient(circle at 80% 20%, rgba(59, 130, 246, 0.15), transparent 60%), var(--bg-card); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5); display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+        .tasks-summary-left { display: flex; flex-direction: column; gap: 4px; }
+        .tasks-summary-title { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); font-weight: 800; }
+        .tasks-summary-val { font-size: 26px; font-weight: 900; color: #60a5fa; text-shadow: 0 2px 14px rgba(96, 165, 250, 0.4); display: flex; align-items: baseline; gap: 6px; }
+        .tasks-summary-badge { padding: 5px 12px; border-radius: 999px; background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.3); color: #93c5fd; font-size: 11px; font-weight: 800; }
+        .tasks-group-title { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-secondary); margin: 20px 0 10px; display: flex; align-items: center; gap: 8px; }
+        .tasks-group-title::after { content: ""; flex: 1; height: 1px; background: rgba(255, 255, 255, 0.08); }
+        .task-card { padding: 16px; border-radius: var(--radius-lg); border: 1px solid var(--border-card); background: var(--bg-card); display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; transition: all 0.25s ease; }
+        .task-card:hover { border-color: rgba(255, 255, 255, 0.15); background: var(--bg-card-hover); transform: translateY(-1px); }
+        .task-left { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; }
+        .task-icon-wrap { width: 44px; height: 44px; border-radius: 14px; background: rgba(33, 150, 243, 0.15); border: 1px solid rgba(33, 150, 243, 0.3); display: grid; place-items: center; flex-shrink: 0; }
+        .task-icon-wrap.sponsor { background: radial-gradient(circle, rgba(14, 165, 233, 0.25), rgba(30, 64, 175, 0.2)); border-color: rgba(56, 189, 248, 0.4); }
+        .task-icon-wrap svg { width: 24px; height: 24px; color: #38bdf8; }
+        .task-details { display: flex; flex-direction: column; min-width: 0; }
+        .task-title { font-size: 13px; font-weight: 800; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .task-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+        .task-reward-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 900; color: #60a5fa; margin-top: 4px; }
+        .task-btn { padding: 9px 16px; border-radius: 999px; border: 1px solid rgba(59, 130, 246, 0.4); background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #ffffff; font-family: inherit; font-size: 12px; font-weight: 800; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; transition: all 0.2s cubic-bezier(0.2, 0.9, 0.2, 1); box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35); }
+        .task-btn:hover { background: linear-gradient(135deg, #3b82f6, #2563eb); transform: scale(1.03); box-shadow: 0 6px 18px rgba(37, 99, 235, 0.5); }
+        .task-btn:active { transform: scale(0.96); }
+        .task-btn.checking { background: rgba(245, 158, 11, 0.15); border-color: rgba(245, 158, 11, 0.4); color: #fde047; box-shadow: none; }
+        .task-btn.completed { background: rgba(34, 197, 94, 0.12); border-color: rgba(34, 197, 94, 0.35); color: #86efac; cursor: default; box-shadow: none; pointer-events: none; }
+        .task-placeholder-card { padding: 24px; border-radius: var(--radius-lg); border: 1px dashed rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.02); text-align: center; color: var(--text-muted); }
+        .task-placeholder-icon { width: 38px; height: 38px; margin: 0 auto 10px; color: rgba(255, 255, 255, 0.25); display: flex; align-items: center; justify-content: center; }
+        .task-placeholder-title { font-size: 13px; font-weight: 800; color: var(--text-secondary); margin-bottom: 4px; }
+        .task-placeholder-desc { font-size: 11px; line-height: 1.5; color: var(--text-muted); max-width: 320px; margin: 0 auto; }
         .modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 1000; display: none; align-items: center; justify-content: center; padding: 16px; animation: fadeIn 0.2s ease both; }
         .modal-overlay.open { display: flex; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -342,6 +370,66 @@
                 </div>
             </div>
         </main>
+        <main id="view-tasks" class="game-view">
+            <div class="game-topline">
+                <div>
+                    <div class="section-kicker">Заработай MP</div>
+                    <h2 class="section-title">Задания</h2>
+                </div>
+            </div>
+
+            <div class="tasks-summary-card">
+                <div class="tasks-summary-left">
+                    <div class="tasks-summary-title">Ваш баланс MPOINT</div>
+                    <div class="tasks-summary-val">
+                        <span id="tasks-mp-val">0</span> <span style="font-size: 16px; color: #93c5fd; font-weight: 800;">MP</span>
+                    </div>
+                </div>
+                <div class="tasks-summary-badge">
+                    💎 Валюта MP
+                </div>
+            </div>
+
+            <div class="tasks-group-title">Спонсорские задания</div>
+            <div id="tasks-sponsor-list">
+                <div class="task-card" id="task-card-mines2gm">
+                    <div class="task-left">
+                        <div class="task-icon-wrap sponsor">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="m22 2-7 20-4-9-9-4Z"/>
+                                <path d="M22 2 11 13"/>
+                            </svg>
+                        </div>
+                        <div class="task-details">
+                            <div class="task-title">Подписаться на @mines2gm</div>
+                            <div class="task-sub">Официальный канал Mines 2GM</div>
+                            <div class="task-reward-pill">
+                                <span>+1 MP</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <button type="button" id="task-btn-mines2gm" class="task-btn" onclick="startSponsorTask('mines2gm', 'https://t.me/mines2gm')">
+                            <span>Подписаться</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tasks-group-title">Задания от игроков</div>
+            <div class="task-placeholder-card">
+                <div class="task-placeholder-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+                        <circle cx="9" cy="7" r="4"/>
+                        <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                    </svg>
+                </div>
+                <div class="task-placeholder-title">P2P Биржа заданий</div>
+                <p class="task-placeholder-desc">Скоро появится возможность создавать свои рекламные задания и продвигать каналы среди игроков за MP!</p>
+            </div>
+        </main>
         <main id="view-profile" class="game-view">
             <div class="profile-header-card">
                 <img id="profile-avatar" class="profile-avatar" src="https://ui-avatars.com/api/?name=User&background=2563eb&color=fff&bold=true&size=128" alt="Avatar">
@@ -349,24 +437,30 @@
                 <div id="profile-username" class="profile-meta">@username</div>
                 <div class="profile-summary-grid">
                     <div class="profile-summary-card">
-                        <div class="profile-summary-label">Баланс</div>
+                        <div class="profile-summary-label">Баланс mCoin</div>
                         <strong id="profile-balance">0 m¢</strong>
                     </div>
                     <div class="profile-summary-card">
-                        <div class="profile-summary-label">Игр сыграно</div>
-                        <strong id="profile-games">0</strong>
+                        <div class="profile-summary-label">Баланс MP</div>
+                        <strong id="profile-mp-balance" style="color: #60a5fa;">0 MP</strong>
                     </div>
                 </div>
             </div>
             <div class="profile-block">
-                <h3>О валюте mCoin</h3>
-                <p class="profile-info-text">Валюта mCoin синхронизирована с вашим аккаунтом в основном боте. Вы можете пополнять баланс, получать бонусы в боте и использовать их в играх WebApp!</p>
+                <h3>О валюте mCoin и MP</h3>
+                <p class="profile-info-text">Валюты mCoin и MP синхронизированы с вашим аккаунтом в основном боте. Вы можете выполнять задания, пополнять баланс и использовать их во всех играх!</p>
             </div>
         </main>
         <nav class="tabs">
             <button type="button" id="tab-arena" class="tab-btn active" onclick="switchView('arena')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="3"/><path d="M6 12h4M8 10v4M15 11h.01M18 13h.01"/></svg>
                 <span>Арена</span>
+            </button>
+            <button type="button" id="tab-tasks" class="tab-btn" onclick="switchView('tasks')">
+                <svg viewBox="0 0 36 36" fill="currentColor">
+                    <path d="M12 7h18v2H12zm0 10h18v2H12zm0 10h18v2H12zM5.5 8.5L7 10l3.5-3.5l1.4 1.4L7 12.8L4.1 9.9zm0 10L7 20l3.5-3.5l1.4 1.4L7 22.8L4.1 19.9zm0 10L7 30l3.5-3.5l1.4 1.4L7 32.8L4.1 29.9z"/>
+                </svg>
+                <span>Задания</span>
             </button>
             <button type="button" id="tab-profile" class="tab-btn" onclick="switchView('profile')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>

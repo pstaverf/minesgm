@@ -139,6 +139,7 @@ const state = {
         firstName: initialUser.firstName,
         username: initialUser.username,
         balance: 0,
+        mp_balance: 0,
         avatar: initialUser.avatar
     },
     activeRound: null,
@@ -245,6 +246,9 @@ async function fetchUserProfile() {
         if (data && data.user) {
             state.user.id = data.user.id || state.user.id;
             state.user.balance = Number(data.user.balance) || 0;
+            if (typeof data.user.mp_balance !== "undefined") {
+                state.user.mp_balance = Number(data.user.mp_balance) || 0;
+            }
             if (data.user.first_name && data.user.first_name !== "Игрок") {
                 state.user.firstName = data.user.first_name;
             }
@@ -265,6 +269,10 @@ function renderUserHeader() {
     if (balEl) balEl.textContent = `${formatNumber(state.user.balance)} m¢`;
     const pBalEl = document.getElementById("profile-balance");
     if (pBalEl) pBalEl.textContent = `${formatNumber(state.user.balance)} m¢`;
+    const pMpBal = document.getElementById("profile-mp-balance");
+    if (pMpBal) pMpBal.textContent = `${formatNumber(state.user.mp_balance || 0)} MP`;
+    const tMpVal = document.getElementById("tasks-mp-val");
+    if (tMpVal) tMpVal.textContent = formatNumber(state.user.mp_balance || 0);
     const pName = document.getElementById("profile-name");
     if (pName) pName.textContent = state.user.firstName;
     const pUser = document.getElementById("profile-username");
@@ -280,6 +288,9 @@ function switchView(tabName) {
     const targetTab = document.querySelector(`.tab-btn[data-tab="${tabName}"]`) || document.getElementById(`tab-${tabName}`);
     if (targetPanel) targetPanel.classList.add("active");
     if (targetTab) targetTab.classList.add("active");
+    if (tabName === "tasks") {
+        loadTasks();
+    }
     triggerHaptic("light");
 }
 function getArenaZoomStage() {
@@ -1133,6 +1144,155 @@ async function renderFairHistory() {
     }
 }
 
+let sponsorTaskTimers = {};
+
+async function loadTasks() {
+    try {
+        const data = await apiRequest("/api/tasks");
+        if (data) {
+            if (typeof data.mp_balance !== "undefined") {
+                state.user.mp_balance = Number(data.mp_balance) || 0;
+                renderUserHeader();
+            }
+            if (Array.isArray(data.tasks)) {
+                renderTasksList(data.tasks);
+            }
+        }
+    } catch (err) {
+        console.error("loadTasks error:", err);
+    }
+}
+
+function renderTasksList(tasks) {
+    const listEl = document.getElementById("tasks-sponsor-list");
+    if (!listEl) return;
+    
+    let html = "";
+    tasks.forEach(task => {
+        const timerInfo = sponsorTaskTimers[task.id];
+        const isChecking = timerInfo && timerInfo.secondsLeft > 0;
+        const canVerify = timerInfo && timerInfo.canVerify;
+        
+        let btnHtml = "";
+        if (task.is_completed) {
+            btnHtml = `<button type="button" class="task-btn completed">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Выполнено</span>
+            </button>`;
+        } else if (isChecking) {
+            btnHtml = `<button type="button" class="task-btn checking" disabled>
+                <span>Проверка (${timerInfo.secondsLeft}с)...</span>
+            </button>`;
+        } else if (canVerify) {
+            btnHtml = `<button type="button" class="task-btn" onclick="verifySponsorTask('${escapeHtml(task.id)}')">
+                <span>Проверить</span>
+            </button>`;
+        } else {
+            btnHtml = `<button type="button" class="task-btn" onclick="startSponsorTask('${escapeHtml(task.id)}', '${escapeHtml(task.url)}')">
+                <span>Подписаться</span>
+            </button>`;
+        }
+
+        html += `
+            <div class="task-card" id="task-card-${escapeHtml(task.id)}">
+                <div class="task-left">
+                    <div class="task-icon-wrap sponsor">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="m22 2-7 20-4-9-9-4Z"/>
+                            <path d="M22 2 11 13"/>
+                        </svg>
+                    </div>
+                    <div class="task-details">
+                        <div class="task-title">${escapeHtml(task.title)}</div>
+                        <div class="task-sub">${escapeHtml(task.subtitle)}</div>
+                        <div class="task-reward-pill">
+                            <span>+${task.reward} ${task.currency || 'MP'}</span>
+                        </div>
+                    </div>
+                </div>
+                <div>
+                    ${btnHtml}
+                </div>
+            </div>
+        `;
+    });
+    listEl.innerHTML = html;
+}
+
+function startSponsorTask(taskId, url) {
+    triggerHaptic("medium");
+    if (tg && typeof tg.openTelegramLink === "function" && url.includes("t.me")) {
+        tg.openTelegramLink(url);
+    } else {
+        window.open(url, "_blank");
+    }
+
+    if (!sponsorTaskTimers[taskId]) {
+        sponsorTaskTimers[taskId] = { secondsLeft: 5, canVerify: false };
+    } else {
+        sponsorTaskTimers[taskId].secondsLeft = 5;
+        sponsorTaskTimers[taskId].canVerify = false;
+    }
+
+    loadTasks();
+
+    if (sponsorTaskTimers[taskId].timer) {
+        clearInterval(sponsorTaskTimers[taskId].timer);
+    }
+
+    sponsorTaskTimers[taskId].timer = setInterval(() => {
+        if (sponsorTaskTimers[taskId].secondsLeft > 1) {
+            sponsorTaskTimers[taskId].secondsLeft--;
+            loadTasks();
+        } else {
+            clearInterval(sponsorTaskTimers[taskId].timer);
+            sponsorTaskTimers[taskId].secondsLeft = 0;
+            sponsorTaskTimers[taskId].canVerify = true;
+            loadTasks();
+        }
+    }, 1000);
+}
+
+async function verifySponsorTask(taskId) {
+    triggerHaptic("medium");
+    const btn = document.querySelector(`#task-card-${taskId} .task-btn`);
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<span>Проверка...</span>`;
+    }
+
+    try {
+        const res = await apiRequest("/api/tasks/check", "POST", { task_id: taskId });
+        if (res && res.success) {
+            triggerHaptic("success");
+            showToast(res.message || "Задание успешно выполнено!", "ok");
+            launchConfetti();
+            if (typeof res.mp_balance !== "undefined") {
+                state.user.mp_balance = Number(res.mp_balance);
+                renderUserHeader();
+            }
+            if (sponsorTaskTimers[taskId] && sponsorTaskTimers[taskId].timer) {
+                clearInterval(sponsorTaskTimers[taskId].timer);
+            }
+            delete sponsorTaskTimers[taskId];
+            loadTasks();
+        } else {
+            showToast(res.error || "Не удалось проверить подписку", "error");
+            if (sponsorTaskTimers[taskId]) {
+                sponsorTaskTimers[taskId].canVerify = true;
+            }
+            loadTasks();
+        }
+    } catch (err) {
+        triggerHaptic("error");
+        showToast(err.message || "Ошибка проверки задания", "error");
+        if (sponsorTaskTimers[taskId]) {
+            sponsorTaskTimers[taskId].canVerify = true;
+        }
+        loadTasks();
+    }
+}
+
 window.switchView = switchView;
 window.placeArenaBet = placeArenaBet;
 window.setQuickBet = setQuickBet;
@@ -1148,6 +1308,9 @@ window.closeModal = closeModal;
 window.closeModalOnOverlay = closeModalOnOverlay;
 window.openReplayModal = openReplayModal;
 window.restartReplayAnimation = restartReplayAnimation;
+window.loadTasks = loadTasks;
+window.startSponsorTask = startSponsorTask;
+window.verifySponsorTask = verifySponsorTask;
 function initApp() {
     const freshUser = extractTelegramUser();
     if (freshUser && freshUser.id !== 100001) {

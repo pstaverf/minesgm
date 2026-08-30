@@ -52,6 +52,14 @@ cursor = conn.cursor()
 
 # PostgreSQL Schema & Performance Indexes are automatically initialized via pg_adapter / db.py
 try:
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS user_completed_tasks (
+        user_id BIGINT,
+        task_id TEXT,
+        completed_at TEXT,
+        PRIMARY KEY (user_id, task_id)
+    )
+    """)
     cursor.execute("UPDATE users SET max_balance = balance WHERE max_balance IS NULL OR max_balance < balance")
     conn.commit()
 except Exception:
@@ -14765,12 +14773,142 @@ async def handle_api_me(request: web.Request):
                 "first_name": db_first_name,
                 "username": db_username,
                 "balance": user.get("balance", 0) if user else 0,
+                "mp_balance": user.get("mp_balance", 0) if user else 0,
                 "avatar": real_avatar
             }
         })
     except Exception as e:
         logging.error(f"handle_api_me error: {e}")
         return web.json_response({"error": "Ошибка получения профиля"}, status=400)
+
+
+async def handle_api_tasks(request: web.Request):
+    try:
+        init_data = request.headers.get("X-Telegram-Init-Data")
+        user_info = parse_telegram_init_data(init_data, BOT_TOKEN) if init_data else None
+
+        if user_info:
+            user_id = int(user_info.get("id", 0))
+        else:
+            try:
+                user_id = int(request.headers.get("X-User-Id", 0))
+            except Exception:
+                user_id = 0
+
+        user = get_user(user_id) if user_id else None
+        mp_balance = user.get("mp_balance", 0) if user else 0
+
+        is_completed = False
+        if user_id:
+            try:
+                cursor.execute("SELECT 1 FROM user_completed_tasks WHERE user_id = ? AND task_id = ?", (user_id, "mines2gm"))
+                if cursor.fetchone():
+                    is_completed = True
+            except Exception:
+                pass
+
+        tasks = [
+            {
+                "id": "mines2gm",
+                "type": "channel",
+                "title": "Подписаться на @mines2gm",
+                "subtitle": "Официальный канал сообщества",
+                "url": "https://t.me/mines2gm",
+                "reward": 1,
+                "currency": "MP",
+                "is_completed": is_completed,
+                "is_sponsor": True
+            }
+        ]
+
+        return web.json_response({
+            "mp_balance": mp_balance,
+            "tasks": tasks
+        })
+    except Exception as e:
+        logging.error(f"handle_api_tasks error: {e}")
+        return web.json_response({"error": "Ошибка получения заданий"}, status=400)
+
+
+async def handle_api_tasks_check(request: web.Request):
+    try:
+        init_data = request.headers.get("X-Telegram-Init-Data")
+        user_info = parse_telegram_init_data(init_data, BOT_TOKEN) if init_data else None
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        if user_info:
+            user_id = int(user_info.get("id", 0))
+        else:
+            try:
+                user_id = int(body.get("user_id") or request.headers.get("X-User-Id", 0))
+            except Exception:
+                user_id = 0
+
+        if not user_id:
+            return web.json_response({"error": "Пользователь не авторизован"}, status=401)
+
+        task_id = str(body.get("task_id", "mines2gm")).strip()
+
+        # Check if already completed
+        try:
+            cursor.execute("SELECT 1 FROM user_completed_tasks WHERE user_id = ? AND task_id = ?", (user_id, task_id))
+            if cursor.fetchone():
+                user = get_user(user_id)
+                return web.json_response({
+                    "success": True,
+                    "already_completed": True,
+                    "mp_balance": user.get("mp_balance", 0) if user else 0,
+                    "message": "Вы уже получили награду за это задание!"
+                })
+        except Exception as e:
+            logging.error(f"Check completed task db error: {e}")
+
+        if task_id == "mines2gm":
+            is_subscribed = False
+            # Check chat member on channel @mines2gm
+            try:
+                member = await bot.get_chat_member(chat_id="@mines2gm", user_id=user_id)
+                if member and member.status in ("member", "administrator", "creator"):
+                    is_subscribed = True
+            except Exception as e:
+                logging.warning(f"Failed to check chat member for @mines2gm / {user_id}: {e}")
+
+            if not is_subscribed:
+                return web.json_response({
+                    "success": False,
+                    "error": "Подписка на канал @mines2gm не найдена. Подпишитесь на канал и нажмите «Проверить» снова!"
+                }, status=400)
+
+            # Award MP
+            reward_mp = 1
+            now_iso = get_msk_now().isoformat()
+            try:
+                cursor.execute("INSERT INTO user_completed_tasks (user_id, task_id, completed_at) VALUES (?, ?, ?) ON CONFLICT (user_id, task_id) DO NOTHING", (user_id, task_id, now_iso))
+                cursor.execute("UPDATE users SET mp_balance = COALESCE(mp_balance, 0) + ? WHERE user_id = ?", (reward_mp, user_id))
+                conn.commit()
+            except Exception as e:
+                logging.error(f"Failed to save task completion: {e}")
+
+            user = get_user(user_id)
+            new_mp_balance = user.get("mp_balance", 0) if user else 0
+
+            return web.json_response({
+                "success": True,
+                "reward": reward_mp,
+                "currency": "MP",
+                "mp_balance": new_mp_balance,
+                "message": f"Поздравляем! Вам начислено {reward_mp} MP"
+            })
+        else:
+            return web.json_response({"error": "Неизвестное задание"}, status=400)
+
+    except Exception as e:
+        logging.error(f"handle_api_tasks_check error: {e}")
+        return web.json_response({"error": "Ошибка проверки задания"}, status=400)
 
 
 async def handle_rounds_active(request: web.Request):
@@ -15035,6 +15173,8 @@ def create_app():
     app.router.add_get('/rounds/active', handle_rounds_active)
     app.router.add_post('/rounds/{round_id}/join', handle_rounds_join)
     app.router.add_get('/ws/arena', handle_ws_arena)
+    app.router.add_get('/api/tasks', handle_api_tasks)
+    app.router.add_post('/api/tasks/check', handle_api_tasks_check)
     app.router.add_get('/api/arena/history', handle_api_arena_history)
     app.router.add_get('/api/arena/replay/{round_id}', handle_api_arena_replay)
 
