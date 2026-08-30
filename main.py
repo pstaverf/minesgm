@@ -15122,8 +15122,9 @@ async def finalize_p2p_promotion_creation(message: types.Message, user_id: int, 
         return
 
     target_ru = "канал" if target_type == "channel" else "чат"
+    target_label = f"@{clean_username}" if clean_username else chat_title
     succ_text = (
-        f'<tg-emoji emoji-id="5427009714745517609">✅</tg-emoji><i>{first_name}, твой {target_ru} @{clean_username} успешно добавлен!</i>'
+        f'<tg-emoji emoji-id="5427009714745517609">✅</tg-emoji><i>{first_name}, твой {target_ru} {target_label} успешно добавлен!</i>'
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="« В меню продвижения", callback_data="promote_menu", style="primary")]])
     await message.answer(succ_text, reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
@@ -15135,8 +15136,8 @@ async def process_chat_shared(message: types.Message):
     if message.chat.type != "private":
         return
     user_id = message.from_user.id
-    state_data = promote_user_states.get(user_id)
-    if not state_data or state_data.get("step") not in ["wait_chat", "wait_username"]:
+    state_data = promote_user_states.pop(user_id, None)
+    if not state_data or state_data.get("step") != "wait_chat":
         await message.reply("<i>Сессия добавления задания истекла. Введите /promote заново.</i>", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
         return
 
@@ -15157,39 +15158,25 @@ async def process_chat_shared(message: types.Message):
 
     # Resolve real chat ID and fetch chat info from Telegram
     real_chat_id = chat_id
+    if isinstance(real_chat_id, int) and real_chat_id > 0:
+        candidates = [int(f"-100{real_chat_id}"), real_chat_id]
+    else:
+        candidates = [real_chat_id]
+
     chat_title = "Канал" if target_type == "channel" else "Чат"
     chat_username = ""
-    candidates = [real_chat_id]
-    if isinstance(real_chat_id, int) and real_chat_id > 0:
-        try:
-            candidates.append(int(f"-100{real_chat_id}"))
-        except Exception:
-            pass
 
     for cid in candidates:
         try:
             chat_obj = await bot.get_chat(cid)
-            if chat_obj and chat_obj.username:
+            if chat_obj:
                 real_chat_id = chat_obj.id
                 chat_title = chat_obj.title or chat_title
                 chat_username = (chat_obj.username or "").strip().lstrip("@")
                 break
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning(f"bot.get_chat({cid}) failed: {e}")
 
-    if not chat_username:
-        # Prompt user for username
-        state_data["real_chat_id"] = real_chat_id
-        state_data["step"] = "wait_username"
-        promote_user_states[user_id] = state_data
-        await message.answer(
-            "<i>Канал получен! Пожалуйста, отправьте сюда @юзернейм или ссылку на канал (например: @channel или https://t.me/channel):</i>",
-            reply_markup=ReplyKeyboardRemove(),
-            parse_mode=ParseMode.HTML
-        )
-        return
-
-    promote_user_states.pop(user_id, None)
     first_name = message.from_user.first_name or "Игрок"
     await finalize_p2p_promotion_creation(message, user_id, first_name, state_data, real_chat_id, chat_title, chat_username)
 
@@ -15353,7 +15340,7 @@ async def process_promote_text_input(message: types.Message):
 
     step = state_data.get("step")
 
-    if step == "wait_chat" or step == "wait_username":
+    if step == "wait_chat":
         raw_text = message.text.strip()
         uname = raw_text.replace("https://t.me/", "").replace("http://t.me/", "").replace("t.me/", "").replace("@", "").strip().split("/")[0].split("?")[0]
         if not uname:
@@ -15580,11 +15567,13 @@ async def handle_api_tasks(request: web.Request):
                         is_done_by_user = True
 
                 if not is_done_by_user:
-                    url = f"https://t.me/{p_username}" if p_username else f"https://t.me/c/{str(p_chat_id).replace('-100', '')}"
+                    clean_uname = (p_username or "").strip().lstrip("@")
+                    url = f"https://t.me/{clean_uname}" if clean_uname else f"https://t.me/c/{str(p_chat_id).replace('-100', '')}"
                     tasks.append({
                         "id": task_key,
                         "type": p_type,
                         "title": "Подписка на канал" if p_type == "channel" else "Вступление в группу",
+                        "subtitle": p_title if clean_uname else "",
                         "url": url,
                         "reward": p_price,
                         "currency": "MP",
@@ -15706,22 +15695,34 @@ async def handle_api_tasks_check(request: web.Request):
 
             # Check subscription
             is_subscribed = False
-            check_target = f"@{p_username}" if p_username else p_chat_id
-            try:
-                member = await bot.get_chat_member(chat_id=check_target, user_id=user_id)
-                status_str = str(getattr(member, "status", member) or "").lower()
-                logging.info(f"P2P Subscription check for {check_target} user_id={user_id}: status={status_str}")
-                if any(s in status_str for s in ("member", "administrator", "creator", "owner")):
-                    is_subscribed = True
-                elif getattr(member, "is_member", False):
-                    is_subscribed = True
-            except Exception as e:
-                logging.warning(f"Failed to check P2P subscription for {check_target} / {user_id}: {e}")
+            clean_uname = (p_username or "").strip().lstrip("@")
+            targets_to_try = []
+            if clean_uname:
+                targets_to_try.append(f"@{clean_uname}")
+            if p_chat_id:
+                targets_to_try.append(p_chat_id)
+                if isinstance(p_chat_id, int) and p_chat_id > 0:
+                    targets_to_try.append(int(f"-100{p_chat_id}"))
+
+            for target in targets_to_try:
+                try:
+                    member = await bot.get_chat_member(chat_id=target, user_id=user_id)
+                    status_str = str(getattr(member, "status", member) or "").lower()
+                    logging.info(f"P2P Subscription check for {target} user_id={user_id}: status={status_str}")
+                    if any(s in status_str for s in ("member", "administrator", "creator", "owner")):
+                        is_subscribed = True
+                        break
+                    elif getattr(member, "is_member", False):
+                        is_subscribed = True
+                        break
+                except Exception as e:
+                    logging.warning(f"Failed to check P2P subscription for {target} / {user_id}: {e}")
 
             if not is_subscribed:
+                target_display = f"@{clean_uname}" if clean_uname else "канал"
                 return web.json_response({
                     "success": False,
-                    "error": f"Подписка не найдена. Подпишитесь на {check_target} и попробуйте снова!"
+                    "error": f"Подписка не найдена. Подпишитесь на {target_display} и попробуйте снова!"
                 }, status=400)
 
             now_iso = get_msk_now().isoformat()
