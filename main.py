@@ -15041,6 +15041,9 @@ async def handle_promote_subs_selected(chat_id: int, user_id: int, first_name: s
                 request_chat=KeyboardButtonRequestChat(
                     request_id=1001,
                     chat_is_channel=is_channel,
+                    chat_has_username=True,
+                    request_title=True,
+                    request_username=True,
                     user_administrator_rights=channel_rights
                 )
             )
@@ -15059,7 +15062,10 @@ async def handle_promote_subs_selected(chat_id: int, user_id: int, first_name: s
                     text=btn_text,
                     request_chat=KeyboardButtonRequestChat(
                         request_id=1001,
-                        chat_is_channel=is_channel
+                        chat_is_channel=is_channel,
+                        chat_has_username=True,
+                        request_title=True,
+                        request_username=True
                     )
                 )
             ]],
@@ -15156,26 +15162,32 @@ async def process_chat_shared(message: types.Message):
     chat_id = message.chat_shared.chat_id
     target_type = state_data.get("target_type", "channel")
 
-    # Resolve real chat ID and fetch chat info from Telegram
+    shared_title = getattr(message.chat_shared, "title", None)
+    shared_username = getattr(message.chat_shared, "username", None)
+
     real_chat_id = chat_id
     if isinstance(real_chat_id, int) and real_chat_id > 0:
         candidates = [int(f"-100{real_chat_id}"), real_chat_id]
     else:
         candidates = [real_chat_id]
 
-    chat_title = "Канал" if target_type == "channel" else "Чат"
-    chat_username = ""
+    chat_title = shared_title or ("Канал" if target_type == "channel" else "Чат")
+    chat_username = (shared_username or "").strip().lstrip("@")
 
-    for cid in candidates:
-        try:
-            chat_obj = await bot.get_chat(cid)
-            if chat_obj:
-                real_chat_id = chat_obj.id
-                chat_title = chat_obj.title or chat_title
-                chat_username = (chat_obj.username or "").strip().lstrip("@")
-                break
-        except Exception as e:
-            logging.warning(f"bot.get_chat({cid}) failed: {e}")
+    # If title or username was not returned by client, fallback to get_chat
+    if not chat_username or not shared_title:
+        for cid in candidates:
+            try:
+                chat_obj = await bot.get_chat(cid)
+                if chat_obj:
+                    real_chat_id = chat_obj.id
+                    if not shared_title and chat_obj.title:
+                        chat_title = chat_obj.title
+                    if not chat_username and chat_obj.username:
+                        chat_username = chat_obj.username.strip().lstrip("@")
+                    break
+            except Exception as e:
+                logging.warning(f"bot.get_chat({cid}) failed: {e}")
 
     first_name = message.from_user.first_name or "Игрок"
     await finalize_p2p_promotion_creation(message, user_id, first_name, state_data, real_chat_id, chat_title, chat_username)
