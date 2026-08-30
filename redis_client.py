@@ -31,9 +31,23 @@ async def get_redis():
         return None
 
 
+def _json_serializer(obj):
+    if isinstance(obj, (set, frozenset)):
+        return list(obj)
+    if hasattr(obj, "isoformat"):
+        return obj.isoformat()
+    return str(obj)
+
+
 async def redis_set(key: str, value, expire_sec: int = None):
     r = await get_redis()
-    val_str = json.dumps(value, ensure_ascii=False) if not isinstance(value, (str, int, float)) else str(value)
+    if isinstance(value, (str, int, float)):
+        val_str = str(value)
+    else:
+        try:
+            val_str = json.dumps(value, default=_json_serializer, ensure_ascii=False)
+        except Exception:
+            val_str = str(value)
     if r:
         try:
             if expire_sec:

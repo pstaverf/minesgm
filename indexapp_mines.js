@@ -1144,7 +1144,7 @@ async function renderFairHistory() {
     }
 }
 
-let sponsorTaskTimers = {};
+let activeTasksStatus = {};
 
 async function loadTasks() {
     try {
@@ -1169,128 +1169,97 @@ function renderTasksList(tasks) {
     
     let html = "";
     tasks.forEach(task => {
-        const timerInfo = sponsorTaskTimers[task.id];
-        const isChecking = timerInfo && timerInfo.secondsLeft > 0;
-        const canVerify = timerInfo && timerInfo.canVerify;
+        const status = task.is_completed ? 1 : (activeTasksStatus[task.id] || 0);
         
-        let btnHtml = "";
-        if (task.is_completed) {
-            btnHtml = `<button type="button" class="task-btn completed">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                <span>Выполнено</span>
-            </button>`;
-        } else if (isChecking) {
-            btnHtml = `<button type="button" class="task-btn checking" disabled>
-                <span>Проверка (${timerInfo.secondsLeft}с)...</span>
-            </button>`;
-        } else if (canVerify) {
-            btnHtml = `<button type="button" class="task-btn" onclick="verifySponsorTask('${escapeHtml(task.id)}')">
-                <span>Проверить</span>
-            </button>`;
-        } else {
-            btnHtml = `<button type="button" class="task-btn" onclick="startSponsorTask('${escapeHtml(task.id)}', '${escapeHtml(task.url)}')">
-                <span>Подписаться</span>
-            </button>`;
+        let btnContent = "";
+        let btnClass = "earn-btn";
+        let extraStyle = "";
+        
+        if (status === 0) {
+            btnContent = `<span>Перейти</span>`;
+        } else if (status === 9) {
+            btnClass += " reward-loading";
+            extraStyle = "pointer-events: none;";
+            btnContent = `<span class="eos-icons--loading"></span>`;
+        } else if (status === 1) {
+            btnClass += " reward-complete-btn";
+            btnContent = `<svg xmlns="http://www.w3.org/2000/svg" color="#090909" fill="none" height="18px" viewBox="0 0 24 24" stroke-width="3" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg>`;
+        } else if (status === 2) {
+            btnClass += " reward-fine-btn";
+            btnContent = `<svg xmlns="http://www.w3.org/2000/svg" color="#ffffff" fill="none" height="18px" viewBox="0 0 24 24" stroke-width="3" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>`;
         }
 
+        const rewardClass = status === 1 ? "reward-complete" : (status === 2 ? "reward-fine" : "");
+
         html += `
-            <div class="task-card" id="task-card-${escapeHtml(task.id)}">
-                <div class="task-left">
-                    <div class="task-icon-wrap sponsor">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="m22 2-7 20-4-9-9-4Z"/>
-                            <path d="M22 2 11 13"/>
-                        </svg>
-                    </div>
-                    <div class="task-details">
-                        <div class="task-title">${escapeHtml(task.title)}</div>
-                        <div class="task-sub">${escapeHtml(task.subtitle)}</div>
-                        <div class="task-reward-pill">
-                            <span>+${task.reward} ${task.currency || 'MP'}</span>
-                        </div>
-                    </div>
+            <div class="earn-component-container" id="task-card-${escapeHtml(task.id)}">
+                <div class="task-icon sponsor">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M22 2L11 13" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
                 </div>
-                <div>
-                    ${btnHtml}
+                <div class="task-item-info">
+                    <span class="name">${escapeHtml(task.title)}</span>
+                    <span class="reward ${rewardClass}">+${task.reward} ${escapeHtml(task.currency || 'MP')}</span>
                 </div>
+                <button type="button" class="${btnClass}" style="${extraStyle}" onclick="executeTask('${escapeHtml(task.id)}', '${escapeHtml(task.url)}')">
+                    ${btnContent}
+                </button>
             </div>
         `;
     });
     listEl.innerHTML = html;
 }
 
-function startSponsorTask(taskId, url) {
-    triggerHaptic("medium");
+async function executeTask(taskId, url) {
+    if (activeTasksStatus[taskId] === 9 || activeTasksStatus[taskId] === 1) return;
+    
+    triggerHaptic("light");
+    activeTasksStatus[taskId] = 9;
+    loadTasks();
+
     if (tg && typeof tg.openTelegramLink === "function" && url.includes("t.me")) {
         tg.openTelegramLink(url);
     } else {
         window.open(url, "_blank");
     }
 
-    if (!sponsorTaskTimers[taskId]) {
-        sponsorTaskTimers[taskId] = { secondsLeft: 5, canVerify: false };
-    } else {
-        sponsorTaskTimers[taskId].secondsLeft = 5;
-        sponsorTaskTimers[taskId].canVerify = false;
-    }
-
-    loadTasks();
-
-    if (sponsorTaskTimers[taskId].timer) {
-        clearInterval(sponsorTaskTimers[taskId].timer);
-    }
-
-    sponsorTaskTimers[taskId].timer = setInterval(() => {
-        if (sponsorTaskTimers[taskId].secondsLeft > 1) {
-            sponsorTaskTimers[taskId].secondsLeft--;
-            loadTasks();
-        } else {
-            clearInterval(sponsorTaskTimers[taskId].timer);
-            sponsorTaskTimers[taskId].secondsLeft = 0;
-            sponsorTaskTimers[taskId].canVerify = true;
-            loadTasks();
-        }
-    }, 1000);
-}
-
-async function verifySponsorTask(taskId) {
-    triggerHaptic("medium");
-    const btn = document.querySelector(`#task-card-${taskId} .task-btn`);
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = `<span>Проверка...</span>`;
-    }
-
-    try {
-        const res = await apiRequest("/api/tasks/check", "POST", { task_id: taskId });
-        if (res && res.success) {
-            triggerHaptic("success");
-            showToast(res.message || "Задание успешно выполнено!", "ok");
-            launchConfetti();
-            if (typeof res.mp_balance !== "undefined") {
-                state.user.mp_balance = Number(res.mp_balance);
-                renderUserHeader();
+    // Automatic 10-second check like in Nuxt
+    setTimeout(async () => {
+        try {
+            const res = await apiRequest("/api/tasks/check", "POST", { task_id: taskId });
+            if (res && res.success) {
+                triggerHaptic("success");
+                activeTasksStatus[taskId] = 1;
+                showToast(res.message || "Задание выполнено!", "ok");
+                launchConfetti();
+                if (typeof res.mp_balance !== "undefined") {
+                    state.user.mp_balance = Number(res.mp_balance);
+                    renderUserHeader();
+                }
+                loadTasks();
+            } else {
+                triggerHaptic("error");
+                activeTasksStatus[taskId] = 2;
+                showToast(res.error || "Подписка не найдена", "error");
+                loadTasks();
+                setTimeout(() => {
+                    activeTasksStatus[taskId] = 0;
+                    loadTasks();
+                }, 2500);
             }
-            if (sponsorTaskTimers[taskId] && sponsorTaskTimers[taskId].timer) {
-                clearInterval(sponsorTaskTimers[taskId].timer);
-            }
-            delete sponsorTaskTimers[taskId];
+        } catch (err) {
+            triggerHaptic("error");
+            activeTasksStatus[taskId] = 2;
+            showToast(err.message || "Подписка не найдена", "error");
             loadTasks();
-        } else {
-            showToast(res.error || "Не удалось проверить подписку", "error");
-            if (sponsorTaskTimers[taskId]) {
-                sponsorTaskTimers[taskId].canVerify = true;
-            }
-            loadTasks();
+            setTimeout(() => {
+                activeTasksStatus[taskId] = 0;
+                loadTasks();
+            }, 2500);
         }
-    } catch (err) {
-        triggerHaptic("error");
-        showToast(err.message || "Ошибка проверки задания", "error");
-        if (sponsorTaskTimers[taskId]) {
-            sponsorTaskTimers[taskId].canVerify = true;
-        }
-        loadTasks();
-    }
+    }, 10000);
 }
 
 window.switchView = switchView;
@@ -1309,8 +1278,7 @@ window.closeModalOnOverlay = closeModalOnOverlay;
 window.openReplayModal = openReplayModal;
 window.restartReplayAnimation = restartReplayAnimation;
 window.loadTasks = loadTasks;
-window.startSponsorTask = startSponsorTask;
-window.verifySponsorTask = verifySponsorTask;
+window.executeTask = executeTask;
 function initApp() {
     const freshUser = extractTelegramUser();
     if (freshUser && freshUser.id !== 100001) {

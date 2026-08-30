@@ -14872,7 +14872,11 @@ async def handle_api_tasks_check(request: web.Request):
             # Check chat member on channel @mines2gm
             try:
                 member = await bot.get_chat_member(chat_id="@mines2gm", user_id=user_id)
-                if member and member.status in ("member", "administrator", "creator"):
+                status_str = str(getattr(member, "status", member) or "").lower()
+                logging.info(f"Subscription check for @mines2gm user_id={user_id}: status={status_str}")
+                if any(s in status_str for s in ("member", "administrator", "creator", "owner")):
+                    is_subscribed = True
+                elif getattr(member, "is_member", False):
                     is_subscribed = True
             except Exception as e:
                 logging.warning(f"Failed to check chat member for @mines2gm / {user_id}: {e}")
@@ -14880,7 +14884,7 @@ async def handle_api_tasks_check(request: web.Request):
             if not is_subscribed:
                 return web.json_response({
                     "success": False,
-                    "error": "Подписка на канал @mines2gm не найдена. Подпишитесь на канал и нажмите «Проверить» снова!"
+                    "error": "Подписка на канал @mines2gm не найдена. Подпишитесь на канал и попробуйте снова!"
                 }, status=400)
 
             # Award MP
