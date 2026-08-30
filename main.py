@@ -2273,6 +2273,30 @@ async def cmd_start(message: types.Message):
         elif payload == "p2p":
             await show_p2p_main(message, user_id=user_id, first_name=message.from_user.first_name)
             return
+        elif payload == "promote":
+            promote_user_states.pop(user_id, None)
+            await send_promote_main_menu(message.chat.id, user_id, message.from_user.first_name)
+            return
+        elif payload in ["earn", "earning"]:
+            webapp_url = f"{WEBHOOK_HOST}/app#tasks"
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="📋 Открыть Задания",
+                            web_app=types.WebAppInfo(url=webapp_url),
+                            style="primary"
+                        )
+                    ]
+                ]
+            )
+            text = (
+                f'<tg-emoji emoji-id="5341715473882955310">⚙️</tg-emoji> <i>Заработок доступен в WebApp приложении!</i>\n'
+                f'----------------------\n'
+                f'💎 <i>Выполняйте задания от сообщества и других игроков, чтобы получать MPOINT!</i>'
+            )
+            await message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
+            return
 
     text = (
         '<b>Привет! <tg-emoji emoji-id="5350612670435313545">👋</tg-emoji> Ты в Мины Бот — место, где время летит незаметно!</b>\n\n'
@@ -14760,11 +14784,60 @@ async def send_promote_main_menu(chat_id: int, user_id: int, user_first_name: st
     await bot.send_message(chat_id, text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 
+@dp.message(Command("earning", "earn", "заработать", "заработок"))
+@dp.message(lambda message: message.text and message.text.strip().lower() in ["заработать", "заработок", "/earning", "earning", "/earn", "earn"])
+async def cmd_earning(message: types.Message):
+    if message.chat.type in ["group", "supergroup"]:
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Перейти к заработку",
+                        url=f"https://t.me/{BOT_USERNAME}?start=earn"
+                    )
+                ]
+            ]
+        )
+        await message.reply("<i>Заработок доступен только в личных сообщениях!</i>", reply_markup=keyboard, parse_mode=ParseMode.HTML)
+        return
+
+    webapp_url = f"{WEBHOOK_HOST}/app#tasks"
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📋 Открыть Задания",
+                    web_app=types.WebAppInfo(url=webapp_url),
+                    style="primary"
+                )
+            ]
+        ]
+    )
+    text = (
+        f'<tg-emoji emoji-id="5341715473882955310">⚙️</tg-emoji> <i>Заработок доступен в WebApp приложении!</i>\n'
+        f'----------------------\n'
+        f'💎 <i>Выполняйте задания от сообщества и других игроков, чтобы получать MPOINT!</i>'
+    )
+    await message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
+
+
 @dp.message(Command("promote", "продвижение"))
 @dp.message(lambda message: message.text and message.text.strip().lower() in ["продвижение", "/promote", "promote", "/продвижение"])
 async def cmd_promote(message: types.Message):
-    if message.chat.type != "private":
+    if message.chat.type in ["group", "supergroup"]:
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Перейти в продвижение",
+                        url=f"https://t.me/{BOT_USERNAME}?start=promote"
+                    )
+                ]
+            ]
+        )
+        await message.reply("<i>Эта команда работает только в личных сообщениях!</i>", reply_markup=keyboard, parse_mode=ParseMode.HTML)
         return
+
     user_id = message.from_user.id
     promote_user_states.pop(user_id, None)
     await send_promote_main_menu(message.chat.id, user_id, message.from_user.first_name)
@@ -14958,9 +15031,9 @@ async def handle_promote_subs_selected(chat_id: int, user_id: int, first_name: s
     )
 
     msg2 = await bot.send_message(chat_id, text2, reply_markup=kb_cancel, parse_mode=ParseMode.HTML)
-    await bot.send_message(chat_id, "👇 Нажмите кнопку внизу:", reply_markup=reply_kb)
+    msg3 = await bot.send_message(chat_id, "👇 Нажмите кнопку внизу клавиатуры:", reply_markup=reply_kb)
 
-    state_data["msg_ids"] = [msg1.message_id, msg2.message_id]
+    state_data["msg_ids"] = [msg1.message_id, msg2.message_id, msg3.message_id]
     promote_user_states[user_id] = state_data
 
 

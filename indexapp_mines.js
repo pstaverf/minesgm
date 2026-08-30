@@ -1306,6 +1306,12 @@ function initApp() {
     pollActiveRound();
     initWebSocket();
     measurePing();
+
+    const startParam = tg?.initDataUnsafe?.start_param || "";
+    if (startParam === "tasks" || startParam === "earn" || window.location.hash === "#tasks" || window.location.search.includes("tasks")) {
+        switchView("tasks");
+    }
+
     setInterval(pollActiveRound, 2000);
     setInterval(fetchUserProfile, 4000);
     setInterval(measurePing, 1000);
