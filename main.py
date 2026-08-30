@@ -14990,6 +14990,12 @@ async def handle_promote_subs_selected(chat_id: int, user_id: int, first_name: s
     is_channel = (target_type == "channel")
     btn_text = "Отправить канал" if is_channel else "Отправить чат"
 
+    if message_to_edit:
+        try:
+            await message_to_edit.delete()
+        except Exception:
+            pass
+
     # Message 1
     text1 = (
         '<tg-emoji emoji-id="5274099962655816924">❗️</tg-emoji> ВАЖНО <tg-emoji emoji-id="5274099962655816924">❗️</tg-emoji>\n'
@@ -15001,6 +15007,32 @@ async def handle_promote_subs_selected(chat_id: int, user_id: int, first_name: s
     # Message 2 with cancel inline button and reply keyboard for chat_shared
     text2 = '<i>⛓💥"Хотите отменить добавление? Если нет, выберите кнопку на клавиатуре.👇</i>'
     kb_cancel = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="promote_cancel", style="danger")]])
+    msg2 = await bot.send_message(chat_id, text2, reply_markup=kb_cancel, parse_mode=ParseMode.HTML)
+
+    if is_channel:
+        fields = {k: False for k in ChatAdministratorRights.model_fields.keys()}
+        fields.update({
+            "can_change_info": True,
+            "can_post_messages": True,
+            "can_edit_messages": True,
+            "can_delete_messages": True,
+            "can_invite_users": True,
+            "can_pin_messages": True,
+            "can_promote_members": True
+        })
+        channel_rights = ChatAdministratorRights(**fields)
+    else:
+        fields = {k: False for k in ChatAdministratorRights.model_fields.keys()}
+        fields.update({
+            "can_change_info": True,
+            "can_delete_messages": True,
+            "can_invite_users": True,
+            "can_restrict_members": True,
+            "can_pin_messages": True,
+            "can_promote_members": True,
+            "can_manage_video_chats": True
+        })
+        channel_rights = ChatAdministratorRights(**fields)
 
     reply_kb = ReplyKeyboardMarkup(
         keyboard=[[
@@ -15009,20 +15041,7 @@ async def handle_promote_subs_selected(chat_id: int, user_id: int, first_name: s
                 request_chat=KeyboardButtonRequestChat(
                     request_id=1001,
                     chat_is_channel=is_channel,
-                    user_administrator_rights=ChatAdministratorRights(
-                        is_anonymous=False,
-                        can_manage_chat=True,
-                        can_delete_messages=True,
-                        can_manage_video_chats=True,
-                        can_restrict_members=True,
-                        can_promote_members=True,
-                        can_change_info=True,
-                        can_invite_users=True,
-                        can_post_messages=True,
-                        can_edit_messages=True,
-                        can_pin_messages=True,
-                        can_manage_topics=False
-                    )
+                    user_administrator_rights=channel_rights
                 )
             )
         ]],
@@ -15030,8 +15049,24 @@ async def handle_promote_subs_selected(chat_id: int, user_id: int, first_name: s
         one_time_keyboard=True
     )
 
-    msg2 = await bot.send_message(chat_id, text2, reply_markup=kb_cancel, parse_mode=ParseMode.HTML)
-    msg3 = await bot.send_message(chat_id, "👇 Нажмите кнопку внизу клавиатуры:", reply_markup=reply_kb)
+    try:
+        msg3 = await bot.send_message(chat_id, "👇 Нажмите кнопку внизу клавиатуры:", reply_markup=reply_kb)
+    except Exception as e:
+        logging.warning(f"Failed to send KeyboardButtonRequestChat with rights: {e}")
+        fallback_kb = ReplyKeyboardMarkup(
+            keyboard=[[
+                KeyboardButton(
+                    text=btn_text,
+                    request_chat=KeyboardButtonRequestChat(
+                        request_id=1001,
+                        chat_is_channel=is_channel
+                    )
+                )
+            ]],
+            resize_keyboard=True,
+            one_time_keyboard=True
+        )
+        msg3 = await bot.send_message(chat_id, "👇 Нажмите кнопку внизу клавиатуры:", reply_markup=fallback_kb)
 
     state_data["msg_ids"] = [msg1.message_id, msg2.message_id, msg3.message_id]
     promote_user_states[user_id] = state_data
