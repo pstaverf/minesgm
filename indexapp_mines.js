@@ -597,7 +597,6 @@ function renderArenaRound(round) {
     renderPlayersList(round.players);
     const msgEl = document.getElementById("arena-field-message");
     if (msgEl) {
-        // visibility handled via .has-zones CSS class on parent .arena-field
         msgEl.textContent = round.zones && round.zones.length > 0 ? "" : "Сделайте ставку первым!";
     }
     if (round.status === "live" && (prevStatus !== "live" || prevId !== round.id)) {
@@ -615,7 +614,6 @@ function renderArenaRound(round) {
 function renderZones(zones, containerId) {
     const container = document.getElementById(containerId);
     if (!container) return;
-    // Toggle has-zones on the parent arena-field
     const field = container.closest(".arena-field");
     if (!zones || zones.length === 0) {
         container.innerHTML = "";
@@ -628,7 +626,6 @@ function renderZones(zones, containerId) {
         const avatar = getAvatarUrl(z.avatar, z.name, z.playerId);
         const lx = z.labelX != null ? z.labelX : z.width / 2;
         const ly = z.labelY != null ? z.labelY : z.height / 2;
-        // labelX/labelY are absolute % within field; convert to relative within zone
         const innerLeft = ((lx - z.x) / z.width * 100).toFixed(2);
         const innerTop  = ((ly - z.y) / z.height * 100).toFixed(2);
         html += `
@@ -846,7 +843,7 @@ function launchConfetti() {
         particles.forEach(p => {
             p.x += p.vx;
             p.y += p.vy;
-            p.vy += 0.35; // gravity
+            p.vy += 0.35;
             p.rotation += p.rotSpeed;
             p.opacity = Math.max(0, 1 - elapsed / 2200);
             ctx.save();
@@ -1246,7 +1243,6 @@ async function executeTask(taskId, url) {
         window.open(url, "_blank");
     }
 
-    // Automatic 10-second check like in Nuxt
     setTimeout(async () => {
         try {
             const res = await apiRequest("/api/tasks/check", "POST", { task_id: taskId });
@@ -1258,7 +1254,6 @@ async function executeTask(taskId, url) {
                     renderUserHeader();
                 }
                 renderTasksList(cachedTasksList);
-                // After 2 seconds, smoothly remove the task
                 setTimeout(() => {
                     const card = document.getElementById(`task-card-${taskId}`);
                     if (card) card.classList.add("task-removing");
