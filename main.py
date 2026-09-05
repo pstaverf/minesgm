@@ -54,7 +54,7 @@ from pg_adapter import get_db_connection
 conn = get_db_connection()
 cursor = conn.cursor()
 
-# PostgreSQL Schema & Performance Indexes are automatically initialized via pg_adapter / db.py
+
 try:
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS user_completed_tasks (
@@ -85,7 +85,6 @@ try:
 except Exception:
     pass
 
-# High-Speed In-Memory Caches
 _known_usernames = {}
 _known_names = {}
 _known_chat_members = set()
@@ -556,7 +555,6 @@ def get_user_history_count(user_id):
         return 0
 
 
-# --- BANK & DEPOSIT SYSTEM HELPERS ---
 TIME_DEPOSIT_RATES = {
     1: 0.4,
     3: 1.5,
@@ -15558,7 +15556,6 @@ async def handle_api_tasks(request: web.Request):
                 "is_sponsor": True
             })
 
-        # Fetch active P2P tasks
         try:
             cursor.execute("""
                 SELECT id, user_id, chat_id, chat_title, chat_username, chat_type, price_per_sub, total_subs, completed_subs
@@ -15627,7 +15624,6 @@ async def handle_api_tasks_check(request: web.Request):
 
         task_id = str(body.get("task_id", "mines2gm")).strip()
 
-        # Check if already completed
         try:
             cursor.execute("SELECT 1 FROM user_completed_tasks WHERE user_id = ? AND task_id = ?", (user_id, task_id))
             if cursor.fetchone():
@@ -15643,7 +15639,6 @@ async def handle_api_tasks_check(request: web.Request):
 
         if task_id == "mines2gm":
             is_subscribed = False
-            # Check chat member on channel @mines2gm
             try:
                 member = await bot.get_chat_member(chat_id="@mines2gm", user_id=user_id)
                 status_str = str(getattr(member, "status", member) or "").lower()
@@ -15661,7 +15656,6 @@ async def handle_api_tasks_check(request: web.Request):
                     "error": "Подписка на канал @mines2gm не найдена. Подпишитесь на канал и попробуйте снова!"
                 }, status=400)
 
-            # Award MP
             reward_mp = 1
             now_iso = get_msk_now().isoformat()
             try:
@@ -15705,7 +15699,6 @@ async def handle_api_tasks_check(request: web.Request):
             if user_id == creator_id:
                 return web.json_response({"error": "Вы не можете выполнять собственное задание!"}, status=400)
 
-            # Check subscription
             is_subscribed = False
             clean_uname = (p_username or "").strip().lstrip("@")
             targets_to_try = []
@@ -15750,7 +15743,6 @@ async def handle_api_tasks_check(request: web.Request):
             except Exception as e:
                 logging.error(f"Failed to save P2P task completion: {e}")
 
-            # Notify creator if task finished
             if is_now_finished:
                 try:
                     chat_link = f"https://t.me/{p_username}" if p_username else f"ID: {p_chat_id}"
@@ -15843,11 +15835,9 @@ async def handle_rounds_join(request: web.Request):
         if user.get("balance", 0) < amount:
             return web.json_response({"error": "Недостаточно mCoin на балансе!"}, status=400)
 
-        # Verify round state before deducting funds
         if not arena_engine.current_round or arena_engine.current_round.get("status") not in ["waiting", "launching"]:
             return web.json_response({"error": "Раунд уже запущен, дождитесь следующего!"}, status=400)
 
-        # Deduct balance securely
         deduct_ok = False
         try:
             with arena_engine.get_db() as db_conn:
@@ -15979,7 +15969,7 @@ async def handle_api_arena_replay(request: web.Request):
         return web.json_response({"error": "Replay not found"}, status=404)
     return web.json_response({"round": round_data})
 
-
+#баг с тикером(убрано)
 async def arena_ticker_task():
     while True:
         try:
@@ -16034,7 +16024,7 @@ async def on_shutdown(bot: Bot) -> None:
 def create_app():
     app = web.Application()
 
-    # WebApp routes & APIs
+    #роуты
     app.router.add_get('/', handle_webapp_index)
     app.router.add_get('/app', handle_webapp_index)
     app.router.add_get('/2minesg.html', handle_webapp_index)
